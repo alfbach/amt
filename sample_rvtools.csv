@@ -1,0 +1,4 @@
+VM,Powerstate,Template,CPUs,Memory,Provisioned MB,In use MB,Cluster,Host,OS according to configuration file,VM UUID
+web-srv-01,poweredOn,False,4,8192,51200,25600,Production,esx01.example.com,Ubuntu 64-bit,420xxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+db-srv-01,poweredOn,False,8,16384,102400,81920,Production,esx01.example.com,Red Hat Enterprise Linux 8 64-bit,420yyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy
+test-vm,poweredOff,False,2,4096,25600,12800,Production,esx02.example.com,Microsoft Windows Server 2019,420zzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz
