@@ -17,6 +17,11 @@ from i18n import get_translations
 from migration_plan import build_migration_phases, generate_plan_markdown, generate_plan_with_risk_markdown
 from risk_analysis import compute_risk_analysis
 from rvtools_parser import filter_vms_for_migration, get_vm_data, get_host_count, load_rvtools
+try:
+    from vcenter_client import fetch_vms_from_vcenter
+    VCENTER_AVAILABLE = True
+except ImportError:
+    VCENTER_AVAILABLE = False
 from deploy_prototype import (
     build_install_config,
     build_azure_credentials_json,
@@ -795,29 +800,91 @@ st.markdown(
 )
 st.markdown(t["app_subtitle"])
 
-uploaded = st.file_uploader(
-    t["upload_label"],
-    type=["xlsx", "xls", "csv"],
-    help=t["upload_help"],
+# Import source: file or vCenter
+import_options = ["file", "vcenter"] if VCENTER_AVAILABLE else ["file"]
+import_source = st.radio(
+    t["import_source"],
+    options=import_options,
+    format_func=lambda x: t["import_source_file"] if x == "file" else t["import_source_vcenter"],
+    horizontal=True,
+    key="import_source_radio",
 )
 
-if not uploaded:
-    st.info(t["upload_info"])
-    st.stop()
+sheets = None
 
-with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded.name).suffix) as tmp:
-    tmp.write(uploaded.getvalue())
-    tmp_path = tmp.name
+if import_source == "file":
+    uploaded = st.file_uploader(
+        t["upload_label"],
+        type=["xlsx", "xls", "csv"],
+        help=t["upload_help"],
+        key="file_uploader",
+    )
+    if not uploaded:
+        st.info(t["upload_info"])
+        st.stop()
 
-try:
-    sheets = load_rvtools(tmp_path)
-except Exception as e:
-    st.error(f"{t['error_load']}: {e}")
-    st.stop()
-finally:
-    Path(tmp_path).unlink(missing_ok=True)
+    progress_bar = st.progress(0, text=t["import_progress"])
+    try:
+        progress_bar.progress(0.15, text=t["import_step_load"])
+        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded.name).suffix) as tmp:
+            tmp.write(uploaded.getvalue())
+            tmp_path = tmp.name
+        try:
+            sheets = load_rvtools(tmp_path)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+        progress_bar.progress(0.5, text=t["import_step_analyze"])
+    except Exception as e:
+        progress_bar.empty()
+        st.error(f"{t['error_load']}: {e}")
+        st.stop()
+
+else:
+    # vCenter live import
+    st.subheader(t["import_source_vcenter"])
+    vc_host = st.text_input(
+        t["vcenter_host"],
+        placeholder="vcenter.example.com",
+        help=t["vcenter_host_help"],
+        key="vcenter_host",
+    )
+    vc_user = st.text_input(t["vcenter_user"], key="vcenter_user")
+    vc_password = st.text_input(
+        t["vcenter_password"],
+        type="password",
+        key="vcenter_password",
+    )
+    vc_skip_ssl = st.checkbox(
+        t["vcenter_skip_ssl"],
+        value=False,
+        help=t["vcenter_skip_ssl_help"],
+        key="vcenter_skip_ssl",
+    )
+
+    if not st.button(t["import_connect"], key="vcenter_connect_btn"):
+        st.info(t["upload_info"])
+        st.stop()
+
+    progress_bar = st.progress(0, text=t["import_progress"])
+    try:
+        progress_bar.progress(0.1, text=t["import_step_connect"])
+        progress_bar.progress(0.3, text=t["import_step_fetch"])
+        sheets = fetch_vms_from_vcenter(
+            host=vc_host,
+            user=vc_user,
+            password=vc_password,
+            skip_ssl=vc_skip_ssl,
+        )
+        progress_bar.progress(0.7, text=t["import_step_analyze"])
+    except Exception as e:
+        progress_bar.empty()
+        st.error(f"{t.get('vcenter_error', 'vCenter error')}: {e}")
+        st.stop()
+
+progress_bar.progress(0.85, text=t["import_step_analyze"])
 
 if not sheets:
+    progress_bar.empty()
     st.warning(t["no_data"])
     st.stop()
 
@@ -825,10 +892,13 @@ vm_df = get_vm_data(sheets)
 vm_df = filter_vms_for_migration(vm_df)
 
 if vm_df.empty:
+    progress_bar.empty()
     st.warning(t["no_vm_data"])
     st.stop()
 
 recommendations = analyze_all_vms(vm_df)
+progress_bar.progress(1.0, text=t["import_step_done"])
+progress_bar.empty()
 stats = summary_stats(vm_df, recommendations)
 phases = build_migration_phases(recommendations)
 plan_md = generate_plan_markdown(sheets, recommendations, stats)
