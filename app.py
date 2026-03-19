@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Streamlit-App: RVTools-Analyse und Migrationsplan VMware → OpenShift Virtualization.
-Mit Sprachwahl (EN/FR/DE), Konfiguration (Worker-Node, Overcommit) und Cluster-Design inkl. Einsparungen.
+AlfsMigrationToolkit: RVTools analysis and migration plan VMware → OpenShift Virtualization.
+Multi-language (EN/FR/DE), worker node config, cluster design, and cost estimation.
 """
 
 import tempfile
@@ -22,6 +22,8 @@ try:
     VCENTER_AVAILABLE = True
 except ImportError:
     VCENTER_AVAILABLE = False
+from cloud_baremetal import get_bare_metal_offerings
+from cloud_regions import get_regions
 from deploy_prototype import (
     build_install_config,
     build_azure_credentials_json,
@@ -32,107 +34,204 @@ from deploy_prototype import (
 )
 
 st.set_page_config(
-    page_title="VMware → OpenShift Virt Migration",
-    page_icon="🔄",
+    page_title="AlfsMigrationToolkit",
+    page_icon="📦",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# Red Hat–inspired styling + Font Awesome (Red Hat brand icons)
+# Apple-inspired styling (HIG: clarity, depth, deference)
 st.markdown(
     "<link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css'>",
     unsafe_allow_html=True,
 )
 st.markdown("""
 <style>
-    /* Red Hat brand: #EE0000 red, #151515 dark gray text */
-    .rh-icon { color: #EE0000; margin-right: 0.35em; }
-    .rh-icon.sidebar { color: #EE0000; font-size: 1.1rem; }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     :root {
-        --rh-red: #EE0000;
-        --rh-red-hover: #CC0000;
-        --rh-dark: #151515;
-        --rh-gray: #6E6E6E;
-        --rh-bg: #FFFFFF;
-        --rh-bg-secondary: #F5F5F5;
+        --apple-blue: #007AFF;
+        --apple-blue-hover: #0051D5;
+        --apple-gray-1: #0D0D0F;
+        --apple-gray-2: #4A4A4E;
+        --apple-bg: #FFFFFF;
+        --apple-bg-secondary: #F2F2F7;
+        --apple-bg-tertiary: #D1D1D6;
     }
-    /* Main header / title area */
+    * { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'SF Pro Display', 'Segoe UI', sans-serif !important; }
+    /* Base readability: larger body text */
+    .stMarkdown, p, [data-testid="stMarkdown"] {
+        font-size: 1.05rem !important;
+        line-height: 1.6 !important;
+        color: var(--apple-gray-1) !important;
+    }
     h1 {
-        color: var(--rh-dark) !important;
+        color: var(--apple-gray-1) !important;
         font-weight: 600 !important;
-        border-bottom: 3px solid var(--rh-red) !important;
-        padding-bottom: 0.3em !important;
+        font-size: 1.95rem !important;
+        letter-spacing: -0.02em !important;
+        margin-bottom: 0.5rem !important;
     }
     h2 {
-        color: var(--rh-dark) !important;
+        color: var(--apple-gray-1) !important;
         font-weight: 600 !important;
-        border-left: 4px solid var(--rh-red) !important;
-        padding-left: 0.4em !important;
+        font-size: 1.4rem !important;
+        letter-spacing: -0.01em !important;
     }
     h3 {
-        color: var(--rh-dark) !important;
+        color: var(--apple-gray-1) !important;
         font-weight: 600 !important;
+        font-size: 1.2rem !important;
     }
-    /* Sidebar */
     [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1a1a1a 0%, #2d2d2d 100%) !important;
+        background: var(--apple-bg-secondary) !important;
+        border-right: 1px solid var(--apple-bg-tertiary) !important;
     }
     [data-testid="stSidebar"] .stRadio label, [data-testid="stSidebar"] .stSelectbox label,
     [data-testid="stSidebar"] p, [data-testid="stSidebar"] .stMarkdown {
-        color: #e0e0e0 !important;
+        color: var(--apple-gray-1) !important;
+        font-size: 1rem !important;
     }
     [data-testid="stSidebar"] hr {
-        border-color: var(--rh-red) !important;
-        opacity: 0.6;
+        border-color: var(--apple-bg-tertiary) !important;
     }
-    /* Buttons use theme primaryColor; ensure contrast */
     .stButton > button {
-        border-radius: 4px !important;
+        border-radius: 10px !important;
         font-weight: 500 !important;
     }
-    /* Metric cards */
     [data-testid="stMetricValue"] {
-        color: var(--rh-red) !important;
-        font-weight: 700 !important;
+        color: var(--apple-blue) !important;
+        font-weight: 600 !important;
+        font-size: 1.25rem !important;
     }
     [data-testid="stMetricLabel"] {
-        color: var(--rh-gray) !important;
+        color: var(--apple-gray-2) !important;
         font-weight: 500 !important;
+        font-size: 1rem !important;
     }
-    /* Expander */
     .streamlit-expanderHeader {
-        background-color: var(--rh-bg-secondary) !important;
-        border-left: 4px solid var(--rh-red) !important;
+        background-color: var(--apple-bg-secondary) !important;
+        border-radius: 10px !important;
+        font-size: 1.05rem !important;
     }
-    /* DataFrames */
+    .streamlit-expanderContent {
+        font-size: 1.05rem !important;
+        line-height: 1.6 !important;
+    }
     [data-testid="stDataFrame"] {
-        border: 1px solid #e0e0e0 !important;
-        border-radius: 4px !important;
+        border: 1.5px solid var(--apple-bg-tertiary) !important;
+        border-radius: 12px !important;
+        overflow: hidden !important;
+        font-size: 1rem !important;
     }
-    /* Success / info boxes */
+    [data-testid="stDataFrame"] td, [data-testid="stDataFrame"] th {
+        font-size: 1rem !important;
+        padding: 0.6rem 0.75rem !important;
+    }
     [data-testid="stAlert"] {
-        border-left: 4px solid var(--rh-red) !important;
+        border-radius: 12px !important;
+        border-left: 4px solid var(--apple-blue) !important;
     }
-    /* Links */
     a {
-        color: var(--rh-red) !important;
+        color: var(--apple-blue) !important;
         font-weight: 500 !important;
     }
     a:hover {
-        color: var(--rh-red-hover) !important;
+        color: var(--apple-blue-hover) !important;
     }
-    /* Number input focus */
-    .stNumberInput input:focus {
-        box-shadow: 0 0 0 2px var(--rh-red) !important;
-        border-color: var(--rh-red) !important;
+    /* Input fields: larger, better visible, higher contrast */
+    .stTextInput input, .stNumberInput input, .stTextArea textarea {
+        font-size: 1.1rem !important;
+        padding: 0.75rem 1rem !important;
+        min-height: 2.75rem !important;
+        border: 1.5px solid var(--apple-bg-tertiary) !important;
+        border-radius: 10px !important;
+        font-weight: 500 !important;
+        color: var(--apple-gray-1) !important;
+        background-color: var(--apple-bg) !important;
     }
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 0.5rem;
+    .stTextArea textarea { min-height: 4rem !important; }
+    .stTextInput label, .stNumberInput label, .stTextArea label, .stSelectbox label, .stCheckbox label {
+        font-size: 1.05rem !important;
+        font-weight: 500 !important;
+        color: var(--apple-gray-1) !important;
     }
+    .stNumberInput input:focus, .stTextInput input:focus, .stTextArea textarea:focus {
+        box-shadow: 0 0 0 2px var(--apple-blue) !important;
+        border-color: var(--apple-blue) !important;
+    }
+    /* Radio, file uploader: larger, better contrast */
+    .stRadio label, .stCheckbox label { font-size: 1.05rem !important; color: var(--apple-gray-1) !important; }
+    [data-testid="stFileUploader"] {
+        border: 1.5px solid var(--apple-bg-tertiary) !important;
+        border-radius: 12px !important;
+        padding: 1.25rem !important;
+        background: var(--apple-bg) !important;
+    }
+    [data-testid="stFileUploader"] label { font-size: 1.05rem !important; }
+    /* Help text: readable */
+    [data-testid="stForm"] small, .stTooltipIcon { font-size: 0.95rem !important; }
+    .stTabs [data-baseweb="tab-list"] { gap: 0.5rem; }
     .stTabs [aria-selected="true"] {
-        border-bottom: 2px solid var(--rh-red) !important;
-        color: var(--rh-red) !important;
+        border-bottom: 2px solid var(--apple-blue) !important;
+        color: var(--apple-blue) !important;
+    }
+    .vcenter-dialog-container {
+        background: var(--apple-bg) !important;
+        padding: 2rem !important;
+        border-radius: 16px !important;
+        box-shadow: 0 4px 24px rgba(0,0,0,0.08) !important;
+        border: 1px solid var(--apple-bg-tertiary) !important;
+        max-width: 420px !important;
+        margin: 0 auto 0 !important;
+        font-size: 1.1rem !important;
+    }
+    .vcenter-dialog-header {
+        text-align: center;
+        margin-bottom: 1.5rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid var(--apple-bg-tertiary);
+    }
+    .vcenter-dialog-header h3 {
+        margin: 0 !important;
+        color: var(--apple-gray-1) !important;
+        font-size: 1.5rem !important;
+    }
+    .vcenter-dialog-header i {
+        color: var(--apple-blue);
+        margin-right: 0.5rem;
+    }
+    [data-testid="column"]:has(.vcenter-dialog-container) {
+        background: var(--apple-bg-secondary) !important;
+        padding: 2rem !important;
+        border-radius: 16px !important;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.04) !important;
+        font-size: 1.1rem !important;
+    }
+    [data-testid="column"]:has(.vcenter-dialog-container) [data-testid="stForm"] label,
+    [data-testid="column"]:has(.vcenter-dialog-container) [data-testid="stForm"] input {
+        font-size: 1.1rem !important;
+    }
+    .deploy-cost-box {
+        background: var(--apple-bg-secondary) !important;
+        border: 1px solid var(--apple-bg-tertiary) !important;
+        border-radius: 12px !important;
+        padding: 1.25rem 1.5rem !important;
+        margin: 0.75rem 0 !important;
+    }
+    .deploy-cost-box .cost-value {
+        font-size: 1.75rem !important;
+        font-weight: 600 !important;
+        color: var(--apple-blue) !important;
+    }
+    .deploy-cost-box .cost-label {
+        font-size: 1.05rem;
+        color: var(--apple-gray-2);
+    }
+    .deploy-cost-box .cost-total {
+        font-size: 1.4rem !important;
+        font-weight: 600 !important;
+        color: var(--apple-gray-1) !important;
+        margin-top: 0.5rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -182,10 +281,8 @@ if "ov_price_per_node_year" not in st.session_state:
 # Sidebar: Language & Navigation
 with st.sidebar:
     st.markdown(
-        "<p style='font-size:0.85rem; font-weight:700; margin-bottom:0.5rem;'>"
-        "<i class='fab fa-redhat rh-icon sidebar'></i>Red Hat OpenShift</p>"
-        "<p style='font-size:0.75rem; color:#c0c0c0; margin-top:0;'>"
-        "<i class='fas fa-arrow-right' style='font-size:0.65rem; margin-right:0.25rem; color:#8a8a8a;'></i>VMware → OpenShift Virt</p>",
+        "<p style='font-size:0.9rem; font-weight:600; margin-bottom:0.25rem; color:#1C1C1E;'>AlfsMigrationToolkit</p>"
+        "<p style='font-size:0.75rem; color:#8E8E93; margin-top:0;'>VMware → OpenShift Virt</p>",
         unsafe_allow_html=True,
     )
     st.divider()
@@ -224,7 +321,7 @@ with st.sidebar:
 # ---- Configuration page ----
 if st.session_state.page == "config":
     st.markdown(
-        f"<h1><i class='fas fa-cog rh-icon'></i>{t['config_title']}</h1>",
+        f"<h1><i class='fas fa-cog' style='color:#007AFF; margin-right:0.35em;'></i>{t['config_title']}</h1>",
         unsafe_allow_html=True,
     )
     st.markdown(t["config_intro"])
@@ -369,7 +466,7 @@ if st.session_state.page == "config":
 # ---- Cluster Design & Savings page ----
 if st.session_state.page == "cluster_design":
     st.markdown(
-        f"<h1><i class='fas fa-sitemap rh-icon'></i>{t['cluster_design_title']}</h1>",
+        f"<h1><i class='fas fa-sitemap' style='color:#007AFF; margin-right:0.35em;'></i>{t['cluster_design_title']}</h1>",
         unsafe_allow_html=True,
     )
     st.markdown(t["cluster_design_intro"])
@@ -483,7 +580,7 @@ if st.session_state.page == "cluster_design":
 # ---- HA & Network diagram page ----
 if st.session_state.page == "ha_diagram":
     st.markdown(
-        f"<h1><i class='fas fa-shield-halved rh-icon'></i>{t['ha_diagram_title']}</h1>",
+        f"<h1><i class='fas fa-shield-halved' style='color:#007AFF; margin-right:0.35em;'></i>{t['ha_diagram_title']}</h1>",
         unsafe_allow_html=True,
     )
     st.markdown(t["ha_diagram_intro"])
@@ -545,7 +642,7 @@ if st.session_state.page == "ha_diagram":
 # ---- Migration plan & risk analysis page ----
 if st.session_state.page == "migration_plan":
     st.markdown(
-        f"<h1><i class='fas fa-clipboard-list rh-icon'></i>{t['migration_plan_title']}</h1>",
+        f"<h1><i class='fas fa-clipboard-list' style='color:#007AFF; margin-right:0.35em;'></i>{t['migration_plan_title']}</h1>",
         unsafe_allow_html=True,
     )
     st.markdown(t["migration_plan_intro"])
@@ -614,13 +711,23 @@ if st.session_state.page == "migration_plan":
 # ---- Deploy prototype cluster page ----
 if st.session_state.page == "deploy":
     st.markdown(
-        f"<h1><i class='fas fa-cloud-arrow-up rh-icon'></i>{t['deploy_title']}</h1>",
+        f"<h1><i class='fas fa-cloud-arrow-up' style='color:#007AFF; margin-right:0.35em;'></i>{t['deploy_title']}</h1>",
         unsafe_allow_html=True,
     )
     st.markdown(t["deploy_intro"])
     st.warning(t["deploy_credentials_warning"])
 
-    platform_options = ["aws", "azure", "ibmcloud", "baremetal"]
+    pilot_deployment = st.checkbox(
+        t["deploy_pilot_mode"],
+        value=st.session_state.get("deploy_pilot_mode", False),
+        help=t["deploy_pilot_mode_help"],
+        key="deploy_pilot_mode_check",
+    )
+    st.session_state.deploy_pilot_mode = pilot_deployment
+    if pilot_deployment:
+        st.caption(t["deploy_pilot_mode_caption"])
+
+    platform_options = ["baremetal"] if pilot_deployment else ["aws", "azure", "ibmcloud", "baremetal"]
     platform_labels = {
         "aws": t["deploy_platform_aws"],
         "azure": t["deploy_platform_azure"],
@@ -640,8 +747,8 @@ if st.session_state.page == "deploy":
         key="deploy_platform_select",
     )
     st.markdown(
-        f"<p style='font-size:1.1rem; color: var(--rh-gray, #6E6E6E); margin-top:-0.5rem; margin-bottom:1rem;'>"
-        f"<i class='{platform_icons.get(platform, 'fas fa-cloud')}' style='color: var(--rh-red, #EE0000); margin-right:0.35em; font-size:1.25rem;'></i>"
+        f"<p style='font-size:1.1rem; color: #8E8E93; margin-top:-0.5rem; margin-bottom:1rem;'>"
+        f"<i class='{platform_icons.get(platform, 'fas fa-cloud')}' style='color: #007AFF; margin-right:0.35em; font-size:1.25rem;'></i>"
         f"<strong>{platform_labels.get(platform, platform)}</strong></p>",
         unsafe_allow_html=True,
     )
@@ -686,36 +793,181 @@ if st.session_state.page == "deploy":
     )
 
     st.markdown(
-        f"<h3><i class='{platform_icons.get(platform, 'fas fa-cloud')}' style='color: var(--rh-red); margin-right:0.25em;'></i>"
+        f"<h3><i class='{platform_icons.get(platform, 'fas fa-cloud')}' style='color: #007AFF; margin-right:0.25em;'></i>"
         f"{platform_labels.get(platform, platform)}</h3>",
         unsafe_allow_html=True,
     )
     aws_region = aws_access_key = aws_secret_key = None
     azure_region = azure_subscription = azure_tenant = azure_client_id = azure_client_secret = azure_resource_group = None
     ibm_region = ibm_api_key = None
+    architecture = None
 
+    use_bare_metal = None
+    bare_metal_type = None
     if platform == "aws":
+        aws_regions = get_regions("aws")
+        aws_region = st.selectbox(
+            t["deploy_aws_region"],
+            options=[r[0] for r in aws_regions],
+            format_func=lambda x: next((r[1] for r in aws_regions if r[0] == x), x),
+            index=0 if aws_regions else 0,
+            key="deploy_aws_region",
+        )
         c1, c2 = st.columns(2)
         with c1:
-            aws_region = st.text_input(t["deploy_aws_region"], value="us-east-1", key="deploy_aws_region")
             aws_access_key = st.text_input(t["deploy_aws_access_key"], type="password", key="deploy_aws_access_key")
         with c2:
             aws_secret_key = st.text_input(t["deploy_aws_secret_key"], type="password", key="deploy_aws_secret_key")
+        use_bare_metal = st.checkbox(t["deploy_use_bare_metal"], key="deploy_aws_bare_metal")
+        if use_bare_metal:
+            offerings, err = get_bare_metal_offerings(
+                "aws",
+                region=aws_region,
+                aws_access_key=aws_access_key,
+                aws_secret_key=aws_secret_key,
+            )
+            if err:
+                st.caption(t["deploy_bare_metal_fallback"].format(err=err))
+            opts_dict = {o[0]: f"{o[1]} — {o[2]}" for o in offerings}
+            cost_dict = {o[0]: o[3] for o in offerings if len(o) > 3 and o[3] is not None}
+            bare_metal_type = st.selectbox(
+                t["deploy_bare_metal_select"],
+                options=list(opts_dict.keys()),
+                format_func=lambda x: opts_dict.get(x, x),
+                key="deploy_aws_bare_metal_type",
+            )
+            if bare_metal_type and bare_metal_type in cost_dict:
+                num_nodes = st.number_input(
+                    t["deploy_nodes_count"],
+                    min_value=1,
+                    max_value=100,
+                    value=3,
+                    help=t["deploy_nodes_count_help"],
+                    key="deploy_aws_nodes",
+                )
+                cost_per_hour = cost_dict[bare_metal_type]
+                cost_per_node_day = cost_per_hour * 24
+                cost_total_day = cost_per_node_day * num_nodes
+                cost_total_month = cost_total_day * 30
+                st.markdown(
+                    f'<div class="deploy-cost-box">'
+                    f'<div class="cost-label">{t["deploy_cost_per_node"]}</div>'
+                    f'<div class="cost-value">${cost_per_node_day:.0f} / {t["deploy_day"]}</div>'
+                    f'<div class="cost-total">{t["deploy_cost_total_day"]}: {t["deploy_cost_value"].format(cost=f"${cost_total_day:.0f}")}</div>'
+                    f'<div class="cost-total">{t["deploy_cost_total_month"]}: {t["deploy_cost_value"].format(cost=f"${cost_total_month:.0f}")}</div>'
+                    f'<div class="cost-label" style="margin-top:0.5rem; font-size:0.9rem;">{t["deploy_cost_note_aws"]}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
     elif platform == "azure":
-        azure_region = st.text_input(t["deploy_azure_region"], value="eastus", key="deploy_azure_region")
+        azure_regions = get_regions("azure")
+        azure_region = st.selectbox(
+            t["deploy_azure_region"],
+            options=[r[0] for r in azure_regions],
+            format_func=lambda x: next((r[1] for r in azure_regions if r[0] == x), x),
+            index=0,
+            key="deploy_azure_region",
+        )
         azure_resource_group = st.text_input(t["deploy_azure_resource_group"], value="os4-common", key="deploy_azure_rg")
         azure_subscription = st.text_input(t["deploy_azure_subscription"], type="password", key="deploy_azure_sub")
         azure_tenant = st.text_input(t["deploy_azure_tenant"], type="password", key="deploy_azure_tenant")
         azure_client_id = st.text_input(t["deploy_azure_client_id"], type="password", key="deploy_azure_cid")
         azure_client_secret = st.text_input(t["deploy_azure_client_secret"], type="password", key="deploy_azure_secret")
+        use_bare_metal = st.checkbox(t["deploy_use_bare_metal"], key="deploy_azure_bare_metal")
+        if use_bare_metal:
+            offerings, _ = get_bare_metal_offerings("azure", region=azure_region)
+            opts_dict = {o[0]: f"{o[1]} — {o[2]}" for o in offerings}
+            cost_dict = {o[0]: o[3] for o in offerings if len(o) > 3 and o[3] is not None}
+            bare_metal_type = st.selectbox(
+                t["deploy_bare_metal_select"],
+                options=list(opts_dict.keys()),
+                format_func=lambda x: opts_dict.get(x, x),
+                key="deploy_azure_bare_metal_type",
+            )
+            if bare_metal_type and bare_metal_type in cost_dict:
+                num_nodes = st.number_input(
+                    t["deploy_nodes_count"],
+                    min_value=1,
+                    max_value=100,
+                    value=3,
+                    help=t["deploy_nodes_count_help"],
+                    key="deploy_azure_nodes",
+                )
+                cost_per_hour = cost_dict[bare_metal_type]
+                cost_per_node_day = cost_per_hour * 24
+                cost_total_day = cost_per_node_day * num_nodes
+                cost_total_month = cost_total_day * 30
+                st.markdown(
+                    f'<div class="deploy-cost-box">'
+                    f'<div class="cost-label">{t["deploy_cost_per_node"]}</div>'
+                    f'<div class="cost-value">${cost_per_node_day:.0f} / {t["deploy_day"]}</div>'
+                    f'<div class="cost-total">{t["deploy_cost_total_day"]}: {t["deploy_cost_value"].format(cost=f"${cost_total_day:.0f}")}</div>'
+                    f'<div class="cost-total">{t["deploy_cost_total_month"]}: {t["deploy_cost_value"].format(cost=f"${cost_total_month:.0f}")}</div>'
+                    f'<div class="cost-label" style="margin-top:0.5rem; font-size:0.9rem;">{t["deploy_cost_note_azure"]}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
     elif platform == "ibmcloud":
+        ibm_regions = get_regions("ibmcloud")
         c1, c2 = st.columns(2)
         with c1:
-            ibm_region = st.text_input(t["deploy_ibm_region"], value="us-south", key="deploy_ibm_region")
+            ibm_region = st.selectbox(
+                t["deploy_ibm_region"],
+                options=[r[0] for r in ibm_regions],
+                format_func=lambda x: next((r[1] for r in ibm_regions if r[0] == x), x),
+                index=0,
+                key="deploy_ibm_region",
+            )
         with c2:
             ibm_api_key = st.text_input(t["deploy_ibm_api_key"], type="password", key="deploy_ibm_apikey")
+        use_bare_metal = st.checkbox(t["deploy_use_bare_metal"], key="deploy_ibm_bare_metal")
+        if use_bare_metal:
+            offerings, _ = get_bare_metal_offerings(
+                "ibmcloud",
+                region=ibm_region,
+                ibm_api_key=ibm_api_key,
+            )
+            opts_dict = {o[0]: f"{o[1]} — {o[2]}" for o in offerings}
+            cost_dict = {o[0]: o[3] for o in offerings if len(o) > 3 and o[3] is not None}
+            bare_metal_type = st.selectbox(
+                t["deploy_bare_metal_select"],
+                options=list(opts_dict.keys()),
+                format_func=lambda x: opts_dict.get(x, x),
+                key="deploy_ibm_bare_metal_type",
+            )
+            if bare_metal_type and bare_metal_type in cost_dict:
+                num_nodes = st.number_input(
+                    t["deploy_nodes_count"],
+                    min_value=1,
+                    max_value=100,
+                    value=3,
+                    help=t["deploy_nodes_count_help"],
+                    key="deploy_ibm_nodes",
+                )
+                cost_per_hour = cost_dict[bare_metal_type]
+                cost_per_node_day = cost_per_hour * 24
+                cost_total_day = cost_per_node_day * num_nodes
+                cost_total_month = cost_total_day * 30
+                st.markdown(
+                    f'<div class="deploy-cost-box">'
+                    f'<div class="cost-label">{t["deploy_cost_per_node"]}</div>'
+                    f'<div class="cost-value">${cost_per_node_day:.0f} / {t["deploy_day"]}</div>'
+                    f'<div class="cost-total">{t["deploy_cost_total_day"]}: {t["deploy_cost_value"].format(cost=f"${cost_total_day:.0f}")}</div>'
+                    f'<div class="cost-total">{t["deploy_cost_total_month"]}: {t["deploy_cost_value"].format(cost=f"${cost_total_month:.0f}")}</div>'
+                    f'<div class="cost-label" style="margin-top:0.5rem; font-size:0.9rem;">{t["deploy_cost_note_ibm"]}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
     else:
         st.info(t["deploy_baremetal_note"])
+        architecture_options = {"x86_64": t["deploy_arch_x86_64"], "aarch64": t["deploy_arch_aarch64"], "ppc64le": t["deploy_arch_ppc64le"]}
+        architecture = st.selectbox(
+            t["deploy_architecture"],
+            options=list(architecture_options.keys()),
+            format_func=lambda x: architecture_options[x],
+            key="deploy_architecture_select",
+        )
+
 
     ok_name, err_name = validate_cluster_name(cluster_name)
     ok_secret, err_secret = validate_pull_secret(pull_secret_content)
@@ -735,6 +987,9 @@ if st.session_state.page == "deploy":
             azure_region=azure_region,
             azure_base_domain_resource_group=azure_resource_group,
             ibmcloud_region=ibm_region,
+            architecture=architecture,
+            control_plane_type=bare_metal_type,
+            compute_type=bare_metal_type,
         )
         st.success(t["deploy_install_config_generated"])
         st.download_button(
@@ -795,7 +1050,7 @@ if st.session_state.page == "deploy":
 
 # ---- Analysis page (default) ----
 st.markdown(
-    f"<h1><i class='fab fa-redhat rh-icon'></i>{t['app_title']}</h1>",
+    f"<h1><i class='fas fa-box-open' style='color:#007AFF; margin-right:0.35em;'></i>AlfsMigrationToolkit</h1>",
     unsafe_allow_html=True,
 )
 st.markdown(t["app_subtitle"])
@@ -840,30 +1095,43 @@ if import_source == "file":
         st.stop()
 
 else:
-    # vCenter live import
-    st.subheader(t["import_source_vcenter"])
-    vc_host = st.text_input(
-        t["vcenter_host"],
-        placeholder="vcenter.example.com",
-        help=t["vcenter_host_help"],
-        key="vcenter_host",
-    )
-    vc_user = st.text_input(t["vcenter_user"], key="vcenter_user")
-    vc_password = st.text_input(
-        t["vcenter_password"],
-        type="password",
-        key="vcenter_password",
-    )
-    vc_skip_ssl = st.checkbox(
-        t["vcenter_skip_ssl"],
-        value=False,
-        help=t["vcenter_skip_ssl_help"],
-        key="vcenter_skip_ssl",
-    )
+    # vCenter live import - dialog-style UI
+    col_left, col_center, col_right = st.columns([1, 2, 1])
+    with col_center:
+        st.markdown(
+            """
+            <div class="vcenter-dialog-container">
+                <div class="vcenter-dialog-header">
+                    <h3><i class="fas fa-server"></i> """ + t["import_source_vcenter"] + """</h3>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        with st.form("vcenter_login_form", clear_on_submit=False):
+            vc_host = st.text_input(
+                t["vcenter_host"],
+                placeholder="vcenter.example.com",
+                help=t["vcenter_host_help"],
+                key="vcenter_host",
+            )
+            vc_user = st.text_input(t["vcenter_user"], key="vcenter_user", placeholder="administrator@vsphere.local")
+            vc_password = st.text_input(
+                t["vcenter_password"],
+                type="password",
+                key="vcenter_password",
+            )
+            vc_skip_ssl = st.checkbox(
+                t["vcenter_skip_ssl"],
+                value=False,
+                help=t["vcenter_skip_ssl_help"],
+                key="vcenter_skip_ssl",
+            )
+            submitted = st.form_submit_button(t["import_connect"])
 
-    if not st.button(t["import_connect"], key="vcenter_connect_btn"):
-        st.info(t["upload_info"])
-        st.stop()
+        if not submitted:
+            st.info(t["upload_info"])
+            st.stop()
 
     progress_bar = st.progress(0, text=t["import_progress"])
     try:

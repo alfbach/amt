@@ -28,6 +28,11 @@ def build_install_config(
     azure_base_domain_resource_group: Optional[str] = None,
     # IBM Cloud
     ibmcloud_region: Optional[str] = None,
+    # Bare metal (on-prem)
+    architecture: Optional[str] = None,
+    # Cloud bare metal instance type (AWS/IBM/Azure)
+    control_plane_type: Optional[str] = None,
+    compute_type: Optional[str] = None,
 ) -> str:
     """
     Build install-config.yaml content as a string.
@@ -63,6 +68,43 @@ def build_install_config(
     else:
         # baremetal / none
         lines.append("  none: {}")
+    if platform == "baremetal" and architecture:
+        lines.append("# Target architecture (use matching openshift-install binary): " + architecture)
+    # Cloud bare metal: controlPlane and compute instance types
+    instance_type = control_plane_type or compute_type
+    if platform == "aws" and instance_type:
+        lines.append("controlPlane:")
+        lines.append("  platform:")
+        lines.append("    aws:")
+        lines.append("      type: " + instance_type)
+        lines.append("compute:")
+        lines.append("- name: worker")
+        lines.append("  platform:")
+        lines.append("    aws:")
+        lines.append("      type: " + (compute_type or instance_type))
+        lines.append("  replicas: 3")
+    elif platform == "ibmcloud" and instance_type:
+        lines.append("controlPlane:")
+        lines.append("  platform:")
+        lines.append("    ibmcloud:")
+        lines.append("      type: " + instance_type)
+        lines.append("compute:")
+        lines.append("- name: worker")
+        lines.append("  platform:")
+        lines.append("    ibmcloud:")
+        lines.append("      type: " + (compute_type or instance_type))
+        lines.append("  replicas: 3")
+    elif platform == "azure" and instance_type:
+        lines.append("controlPlane:")
+        lines.append("  platform:")
+        lines.append("    azure:")
+        lines.append("      type: " + instance_type)
+        lines.append("compute:")
+        lines.append("- name: worker")
+        lines.append("  platform:")
+        lines.append("    azure:")
+        lines.append("      type: " + (compute_type or instance_type))
+        lines.append("  replicas: 3")
     lines.append("networking:")
     lines.append("  networkType: OVNKubernetes")
     lines.append("  machineNetwork:")

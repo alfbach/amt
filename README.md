@@ -1,6 +1,6 @@
-# VMware → OpenShift Virtualization Migration Analysis
+# AlfsMigrationToolkit
 
-This app analyzes RVTools exports (XLSX/CSV) and creates migration recommendations as well as a migration plan for the transition from VMware vSphere to Red Hat OpenShift Virtualization (including Migration Toolkit for Virtualization, MTV).
+AlfsMigrationToolkit analyzes RVTools exports (XLSX/CSV) and creates migration recommendations as well as a migration plan for the transition from VMware vSphere to OpenShift Virtualization (including Migration Toolkit for Virtualization, MTV).
 
 ## Create and Push Repository on GitHub
 
