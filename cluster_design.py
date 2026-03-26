@@ -6,11 +6,19 @@ OpenShift Data Foundation (ODF) hyperconverged storage design.
 """
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 # ODF minimum: 3 nodes, 0.5 TiB per device (Red Hat docs)
 ODF_MIN_NODES = 3
 ODF_MIN_DISK_TIB = 0.5
+
+# Predefined node sizes for optimization
+OPTIMIZE_CORES = (16, 32, 64, 96, 128, 192, 256, 512)
+OPTIMIZE_MEMORY_GIB = (256, 512, 1024, 2048)
+
+# Cheap hardware limits (max 64 cores, max 2048 GiB)
+OPTIMIZE_CHEAP_MAX_CORES = 64
+OPTIMIZE_CHEAP_MAX_MEMORY_GIB = 2048
 
 
 @dataclass
@@ -54,6 +62,60 @@ class ClusterDesignResult:
     power_new_kw: float
     power_reduction_kw: float
     power_reduction_pct: float
+
+
+def compute_optimal_node_config(
+    total_vcpus: int,
+    total_memory_gib: float,
+    cpu_overcommit: float = 2.0,
+    memory_overcommit: float = 1.0,
+    min_workers: int = 3,
+    max_utilization_pct: float = 75.0,
+    max_cores: Optional[int] = None,
+    max_memory_gib: Optional[int] = None,
+) -> tuple[int, int, int]:
+    """
+    Find the (cores, memory_gib) combination that minimizes worker nodes.
+    Uses predefined cores (16..512) and memory (256..2048 GiB).
+    max_utilization_pct: target max utilization (e.g. 75 = plan for 75% max usage).
+    max_cores, max_memory_gib: optional limits for "cheap hardware" mode.
+    Returns (optimal_cores, optimal_memory_gib, workers_needed).
+    """
+    # Scale workload so resulting capacity yields max_utilization_pct usage
+    utilization = max_utilization_pct / 100.0
+    effective_vcpus = total_vcpus / utilization if utilization > 0 else total_vcpus
+    effective_memory_gib = total_memory_gib / utilization if utilization > 0 else total_memory_gib
+
+    cores_pool = [c for c in OPTIMIZE_CORES if max_cores is None or c <= max_cores]
+    memory_pool = [m for m in OPTIMIZE_MEMORY_GIB if max_memory_gib is None or m <= max_memory_gib]
+    if not cores_pool or not memory_pool:
+        cores_pool = cores_pool or [OPTIMIZE_CORES[0]]
+        memory_pool = memory_pool or [OPTIMIZE_MEMORY_GIB[0]]
+
+    best_cores = cores_pool[0]
+    best_memory = memory_pool[0]
+    best_workers = 999999
+
+    for cores in cores_pool:
+        for memory_gib in memory_pool:
+            design = compute_cluster_design(
+                total_vcpus=int(effective_vcpus),
+                total_memory_gib=effective_memory_gib,
+                worker_cores=cores,
+                worker_memory_gib=memory_gib,
+                cpu_overcommit=cpu_overcommit,
+                memory_overcommit=memory_overcommit,
+                current_hosts=0,
+                current_power_w=0,
+                new_power_w=0,
+                min_workers=min_workers,
+            )
+            if design.workers_needed < best_workers:
+                best_workers = design.workers_needed
+                best_cores = cores
+                best_memory = memory_gib
+
+    return best_cores, best_memory, best_workers
 
 
 def compute_cluster_design(

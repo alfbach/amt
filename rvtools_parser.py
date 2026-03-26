@@ -21,7 +21,16 @@ VINFO_COLUMNS = {
     "in_use_mb": ["In use MB", "In use MiB", "In Use MB", "in use MB"],
     "cluster": ["Cluster", "cluster"],
     "host": ["Host", "host", "ESX Host"],
-    "guest_os": ["OS according to configuration file", "Guest OS", "OS", "GuestOS"],
+    "guest_os": [
+        "OS according to configuration file",
+        "OS according to the configuration file",
+        "Guest OS",
+        "GuestOS",
+        "OS",
+        "os",
+        "Operating System",
+        "OperatingSystem",
+    ],
     "uuid": ["VM UUID", "UUID", "vm uuid"],
     "primary_ip": ["Primary IP", "Primary IP Address", "IP Address"],
     "folder": ["Folder", "folder"],
@@ -37,10 +46,13 @@ def _normalize_columns(df: pd.DataFrame, column_map: dict[str, list[str]]) -> pd
     """DataFrame-Spalten auf einheitliche Namen mappen."""
     rename = {}
     for standard_name, variants in column_map.items():
+        variants_lower = [v.lower() for v in variants]
         for col in df.columns:
-            if col and str(col).strip() in variants:
-                rename[col] = standard_name
-                break
+            if col:
+                col_clean = str(col).strip()
+                if col_clean in variants or col_clean.lower() in variants_lower:
+                    rename[col] = standard_name
+                    break
     return df.rename(columns=rename)
 
 
@@ -125,3 +137,12 @@ def get_host_count(sheets: dict) -> int:
         if name in sheets:
             return max(0, len(sheets[name]))
     return 0
+
+
+def get_host_count_from_vm_data(vm_df: pd.DataFrame) -> int:
+    """Number of unique ESXi hosts from VM data (host column). For vCenter or RVTools without vHost."""
+    if vm_df.empty or "host" not in vm_df.columns:
+        return 0
+    hosts = vm_df["host"].dropna().astype(str).str.strip()
+    hosts = hosts[hosts.str.len() > 0]
+    return max(0, hosts.nunique())

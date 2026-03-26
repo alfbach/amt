@@ -4,6 +4,12 @@ AlfsMigrationToolkit: RVTools analysis and migration plan VMware → OpenShift V
 Multi-language (EN/FR/DE), worker node config, cluster design, and cost estimation.
 """
 
+import warnings
+
+# urllib3 v2 + macOS LibreSSL: warn on import; must filter before any urllib3 load (do not import urllib3 here).
+warnings.filterwarnings("ignore", message=r".*urllib3 v2 only supports OpenSSL.*")
+warnings.filterwarnings("ignore", message=r".*urllib3.*OpenSSL.*", category=UserWarning)
+
 import tempfile
 from pathlib import Path
 
@@ -11,12 +17,19 @@ import pandas as pd
 import streamlit as st
 
 from analysis import analyze_all_vms, summary_stats
-from cluster_design import compute_cluster_design, compute_odf_design
+from os_analysis import compute_os_analysis
+from cluster_design import (
+    compute_cluster_design,
+    compute_odf_design,
+    compute_optimal_node_config,
+    OPTIMIZE_CHEAP_MAX_CORES,
+    OPTIMIZE_CHEAP_MAX_MEMORY_GIB,
+)
 from ha_network_diagram import build_topology_dot, get_ha_recommendations, get_network_settings
 from i18n import get_translations
 from migration_plan import build_migration_phases, generate_plan_markdown, generate_plan_with_risk_markdown
 from risk_analysis import compute_risk_analysis
-from rvtools_parser import filter_vms_for_migration, get_vm_data, get_host_count, load_rvtools
+from rvtools_parser import filter_vms_for_migration, get_vm_data, get_host_count, get_host_count_from_vm_data, load_rvtools
 try:
     from vcenter_client import fetch_vms_from_vcenter
     VCENTER_AVAILABLE = True
@@ -233,6 +246,40 @@ st.markdown("""
         color: var(--apple-gray-1) !important;
         margin-top: 0.5rem;
     }
+    .amt-menubar-title {
+        font-weight: 600;
+        font-size: 1.1rem;
+        color: var(--apple-gray-1);
+        letter-spacing: -0.02em;
+    }
+    .amt-menubar-tagline {
+        font-size: 0.8rem;
+        color: #8E8E93;
+        margin-top: 0.15rem;
+    }
+    .amt-menubar-row {
+        padding: 0.65rem 0 0.85rem 0;
+        margin: -0.35rem 0 0.75rem 0;
+        border-bottom: 1.5px solid var(--apple-bg-tertiary);
+        background: linear-gradient(180deg, #FAFAFC 0%, #F2F2F7 100%);
+        border-radius: 0 0 12px 12px;
+    }
+    .splash-wrap {
+        max-width: 1000px;
+        margin: 0.5rem auto 1.5rem auto;
+        padding: 1.5rem 1.75rem 2rem 1.75rem;
+        border-radius: 16px;
+        border: 1px solid var(--apple-bg-tertiary);
+        background: linear-gradient(165deg, #FFFFFF 0%, #F2F2F7 100%);
+        box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+    }
+    .splash-head {
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+    .splash-head h1 {
+        margin-bottom: 0.35rem !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -277,37 +324,121 @@ if "odf_price_per_node_year" not in st.session_state:
     st.session_state.odf_price_per_node_year = 0.0
 if "ov_price_per_node_year" not in st.session_state:
     st.session_state.ov_price_per_node_year = 0.0
+if "splash_acknowledged" not in st.session_state:
+    st.session_state.splash_acknowledged = False
 
-# Sidebar: Language & Navigation
-with st.sidebar:
+# Language & translations (menubar + app)
+lang_options = ["en", "de", "fr"]
+lang_labels = {"en": "English", "de": "Deutsch", "fr": "Français"}
+if "lang_select" not in st.session_state:
+    st.session_state.lang_select = st.session_state.get("lang", "en")
+if st.session_state.lang_select not in lang_options:
+    st.session_state.lang_select = "en"
+st.session_state.lang = st.session_state.lang_select
+t = get_translations(st.session_state.lang)
+
+# Splash screen (first session visit): license, disclaimer, feedback
+if not st.session_state.splash_acknowledged:
+    splash_img_path = Path(__file__).resolve().parent / "assets" / "splash.png"
+    st.markdown("<div class='splash-wrap'>", unsafe_allow_html=True)
     st.markdown(
-        "<p style='font-size:0.9rem; font-weight:600; margin-bottom:0.25rem; color:#1C1C1E;'>AlfsMigrationToolkit</p>"
-        "<p style='font-size:0.75rem; color:#8E8E93; margin-top:0;'>VMware → OpenShift Virt</p>",
+        f"<div class='splash-head'><h1>{t['splash_title']}</h1>"
+        f"<p style='color:#8E8E93;font-size:1rem;margin:0'>{t['menubar_tagline']}</p></div>",
         unsafe_allow_html=True,
     )
-    st.divider()
-    lang_options = ["en", "de", "fr"]
-    lang_labels = {"en": "English", "de": "Deutsch", "fr": "Français"}
-    current = st.session_state.get("lang_select") or st.session_state.lang
-    if current not in lang_options:
-        current = "en"
+    _, lang_row2, _ = st.columns([1, 2, 1])
+    with lang_row2:
+        st.selectbox(
+            t["language"],
+            options=lang_options,
+            format_func=lambda x: lang_labels[x],
+            key="lang_select",
+            index=lang_options.index(st.session_state.lang_select)
+            if st.session_state.lang_select in lang_options
+            else 0,
+        )
+    st.session_state.lang = st.session_state.lang_select
+    t = get_translations(st.session_state.lang)
+    img_c, txt_c = st.columns([1, 1])
+    with img_c:
+        if splash_img_path.is_file():
+            _pad_l, _img_25, _pad_r = st.columns([3, 2, 3])
+            with _img_25:
+                st.image(str(splash_img_path), use_container_width=True)
+        else:
+            st.empty()
+    with txt_c:
+        st.markdown(t["splash_intro"])
+        st.markdown(t["splash_gpl2"])
+        st.markdown(t["splash_disclaimer"])
+        st.markdown(t["splash_feedback"])
+    _, cont2, _ = st.columns([1, 2, 1])
+    with cont2:
+        if st.button(t["splash_continue"], type="primary", use_container_width=True, key="splash_continue_btn"):
+            st.session_state.splash_acknowledged = True
+            st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.stop()
+
+# Top menubar: title, language, context help
+page_for_help = st.session_state.get("page_radio", st.session_state.get("page", "analysis"))
+if page_for_help not in (
+    "analysis",
+    "os_analysis",
+    "config",
+    "cluster_design",
+    "ha_diagram",
+    "migration_plan",
+    "deploy",
+):
+    page_for_help = "analysis"
+help_key = f"help_page_{page_for_help}"
+help_body = t.get(help_key, "")
+
+st.markdown("<div class='amt-menubar-row'>", unsafe_allow_html=True)
+mb1, mb2, mb3 = st.columns([3.2, 1.4, 1.4])
+with mb1:
+    st.markdown(
+        f"<div class='amt-menubar-title'>{t['app_title']}</div>"
+        f"<div class='amt-menubar-tagline'>{t['menubar_tagline']}</div>",
+        unsafe_allow_html=True,
+    )
+with mb2:
     st.selectbox(
-        "Language / Sprache / Langue",
+        t["language"],
         options=lang_options,
         format_func=lambda x: lang_labels[x],
         key="lang_select",
-        index=lang_options.index(current),
+        index=lang_options.index(st.session_state.lang_select),
+        label_visibility="collapsed",
     )
-    st.session_state.lang = st.session_state.get("lang_select", st.session_state.lang)
-    t = get_translations(st.session_state.lang)
+with mb3:
+    if hasattr(st, "popover"):
+        try:
+            with st.popover(t["menu_help"], use_container_width=True):
+                st.markdown(help_body)
+        except TypeError:
+            with st.popover(t["menu_help"]):
+                st.markdown(help_body)
+    else:
+        with st.expander(t["menu_help"], expanded=False):
+            st.markdown(help_body)
+st.markdown("</div>", unsafe_allow_html=True)
 
+st.session_state.lang = st.session_state.lang_select
+t = get_translations(st.session_state.lang)
+
+# Sidebar: Navigation only
+with st.sidebar:
     st.divider()
     # Navigation labels with icon hints (icons shown on each page title)
+    nav_pages = ["analysis", "os_analysis", "config", "cluster_design", "ha_diagram", "migration_plan", "deploy"]
     page = st.radio(
         "Navigation",
-        ["analysis", "config", "cluster_design", "ha_diagram", "migration_plan", "deploy"],
+        nav_pages,
         format_func=lambda x: {
             "analysis": "Analysis",
+            "os_analysis": t["tab_os_analysis"],
             "config": t["tab_config"],
             "cluster_design": t["tab_cluster_design"],
             "ha_diagram": t["tab_ha_diagram"],
@@ -325,6 +456,55 @@ if st.session_state.page == "config":
         unsafe_allow_html=True,
     )
     st.markdown(t["config_intro"])
+
+    # Optimize button: find minimal nodes from workload
+    stats = st.session_state.rvtools_stats
+    total_vcpus = stats["total_vcpus"] if stats else 0
+    total_memory_gib = stats["total_memory_gib"] if stats else 0.0
+    opt_col1, opt_col2 = st.columns(2)
+    with opt_col1:
+        if st.button(
+            "🔧 " + t["config_optimize_btn"],
+            help=t["config_optimize_help"],
+            key="config_optimize_btn",
+        ):
+            if total_vcpus > 0 or total_memory_gib > 0:
+                min_workers = st.session_state.get("ha_min_workers", 3) if st.session_state.get("ha_enabled", True) else 1
+                opt_cores, opt_mem, opt_nodes = compute_optimal_node_config(
+                    total_vcpus=total_vcpus,
+                    total_memory_gib=total_memory_gib,
+                    cpu_overcommit=float(st.session_state.cpu_overcommit),
+                    memory_overcommit=float(st.session_state.memory_overcommit),
+                    min_workers=min_workers,
+                )
+                st.session_state.worker_cores = opt_cores
+                st.session_state.worker_memory_gib = opt_mem
+                st.success(t["config_optimize_result"].format(cores=opt_cores, memory=opt_mem, nodes=opt_nodes))
+            else:
+                st.warning(t["config_optimize_no_data"])
+    with opt_col2:
+        if st.button(
+            "💰 " + t["config_optimize_cheap_btn"],
+            help=t["config_optimize_cheap_help"],
+            key="config_optimize_cheap_btn",
+        ):
+            if total_vcpus > 0 or total_memory_gib > 0:
+                min_workers = st.session_state.get("ha_min_workers", 3) if st.session_state.get("ha_enabled", True) else 1
+                opt_cores, opt_mem, opt_nodes = compute_optimal_node_config(
+                    total_vcpus=total_vcpus,
+                    total_memory_gib=total_memory_gib,
+                    cpu_overcommit=float(st.session_state.cpu_overcommit),
+                    memory_overcommit=float(st.session_state.memory_overcommit),
+                    min_workers=min_workers,
+                    max_cores=OPTIMIZE_CHEAP_MAX_CORES,
+                    max_memory_gib=OPTIMIZE_CHEAP_MAX_MEMORY_GIB,
+                )
+                st.session_state.worker_cores = opt_cores
+                st.session_state.worker_memory_gib = opt_mem
+                st.success(t["config_optimize_cheap_result"].format(cores=opt_cores, memory=opt_mem, nodes=opt_nodes))
+            else:
+                st.warning(t["config_optimize_no_data"])
+
     c1, c2 = st.columns(2)
     with c1:
         st.subheader(t["config_target_hw"])
@@ -360,11 +540,12 @@ if st.session_state.page == "config":
         )
     with c2:
         st.subheader(t["current_infra"])
+        current_hosts_val = st.session_state.current_hosts
         st.session_state.current_hosts = st.number_input(
             t["current_hosts"],
             min_value=0,
-            max_value=500,
-            value=st.session_state.current_hosts,
+            max_value=10000,
+            value=min(current_hosts_val, 10000),
             help=t["current_hosts_help"],
         )
         st.session_state.current_power_w = st.number_input(
@@ -383,46 +564,77 @@ if st.session_state.page == "config":
         )
     st.divider()
     st.subheader(t["odf_section"])
-    st.session_state.odf_enabled = st.checkbox(
-        t["odf_enable"],
-        value=st.session_state.odf_enabled,
-        help=t["odf_enable_help"],
+    st.caption(t["odf_section_caption"])
+    storage_type = st.radio(
+        t["storage_type"],
+        options=["odf", "external"],
+        format_func=lambda x: t["storage_type_odf"] if x == "odf" else t["storage_type_external"],
+        index=0 if st.session_state.odf_enabled else 1,
+        horizontal=True,
+        key="storage_type_radio",
     )
+    st.session_state.odf_enabled = storage_type == "odf"
+
     if st.session_state.odf_enabled:
-        oc1, oc2, oc3 = st.columns(3)
-        with oc1:
-            st.session_state.odf_disks_per_node = st.number_input(
-                t["odf_disks_per_node"],
-                min_value=1,
-                max_value=24,
-                value=st.session_state.odf_disks_per_node,
-                help=t["odf_disks_help"],
-            )
-            st.session_state.odf_disk_size_gb = st.number_input(
-                t["odf_disk_size_gb"],
-                min_value=512,
-                max_value=16000,
-                value=st.session_state.odf_disk_size_gb,
-                step=100,
-                help=t["odf_disk_size_help"],
-            )
-        with oc2:
-            repl = st.selectbox(
-                t["odf_replication"],
-                options=[2, 3],
-                index=[2, 3].index(st.session_state.odf_replication_factor) if st.session_state.odf_replication_factor in (2, 3) else 1,
-                help=t["odf_replication_help"],
-            )
-            st.session_state.odf_replication_factor = repl
-        with oc3:
-            st.session_state.odf_growth_buffer_pct = st.number_input(
-                t["odf_growth_buffer"],
-                min_value=10,
-                max_value=50,
-                value=int(st.session_state.odf_growth_buffer_pct),
-                step=5,
-                help=t["odf_growth_buffer_help"],
-            )
+        with st.expander(t["odf_hyperconverged_config"], expanded=True):
+            st.markdown(t["odf_hyperconverged_intro"])
+            oc1, oc2, oc3 = st.columns(3)
+            with oc1:
+                st.session_state.odf_disks_per_node = st.number_input(
+                    t["odf_disks_per_node"],
+                    min_value=1,
+                    max_value=24,
+                    value=st.session_state.odf_disks_per_node,
+                    help=t["odf_disks_help"],
+                )
+                st.session_state.odf_disk_size_gb = st.number_input(
+                    t["odf_disk_size_gb"],
+                    min_value=512,
+                    max_value=16000,
+                    value=st.session_state.odf_disk_size_gb,
+                    step=100,
+                    help=t["odf_disk_size_help"],
+                )
+            with oc2:
+                repl = st.selectbox(
+                    t["odf_replication"],
+                    options=[2, 3],
+                    index=[2, 3].index(st.session_state.odf_replication_factor) if st.session_state.odf_replication_factor in (2, 3) else 1,
+                    help=t["odf_replication_help"],
+                )
+                st.session_state.odf_replication_factor = repl
+                st.session_state.odf_growth_buffer_pct = st.number_input(
+                    t["odf_growth_buffer"],
+                    min_value=10,
+                    max_value=50,
+                    value=int(st.session_state.odf_growth_buffer_pct),
+                    step=5,
+                    help=t["odf_growth_buffer_help"],
+                )
+            with oc3:
+                stats_cfg = st.session_state.rvtools_stats
+                total_vcpus_cfg = stats_cfg["total_vcpus"] if stats_cfg else 0
+                total_mem_cfg = stats_cfg["total_memory_gib"] if stats_cfg else 0.0
+                min_w = st.session_state.get("ha_min_workers", 3) if st.session_state.get("ha_enabled", True) else 1
+                if stats_cfg and (total_vcpus_cfg or total_mem_cfg):
+                    design_cfg = compute_cluster_design(
+                        total_vcpus=total_vcpus_cfg,
+                        total_memory_gib=total_mem_cfg,
+                        worker_cores=st.session_state.worker_cores,
+                        worker_memory_gib=st.session_state.worker_memory_gib,
+                        cpu_overcommit=st.session_state.cpu_overcommit,
+                        memory_overcommit=st.session_state.memory_overcommit,
+                        min_workers=min_w,
+                    )
+                    num_nodes = design_cfg.workers_needed
+                else:
+                    num_nodes = max(3, min_w)
+                raw = st.session_state.odf_disks_per_node * st.session_state.odf_disk_size_gb * num_nodes
+                usable = raw / st.session_state.odf_replication_factor * (1 - st.session_state.odf_growth_buffer_pct / 100)
+                st.metric(t["odf_preview_raw"].format(nodes=num_nodes), f"{raw:,.0f} GB")
+                st.metric(t["odf_preview_usable"], f"{usable:,.0f} GB")
+    else:
+        st.info(t["storage_type_external_note"])
     st.divider()
     st.subheader(t["ha_section"])
     st.session_state.ha_enabled = st.checkbox(
@@ -461,6 +673,82 @@ if st.session_state.page == "config":
             help=t["subscription_ov_help"],
         )
     st.success(t["config_saved"])
+    st.stop()
+
+# ---- OS Analysis page ----
+if st.session_state.page == "os_analysis":
+    st.markdown(
+        f"<h1><i class='fas fa-desktop' style='color:#007AFF; margin-right:0.35em;'></i>{t['os_analysis_title']}</h1>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(t["os_analysis_intro"])
+
+    sheets = st.session_state.rvtools_sheets
+    if not sheets:
+        st.info(t["os_analysis_no_data"])
+        st.stop()
+
+    vm_df_os = get_vm_data(sheets)
+    vm_df_os = filter_vms_for_migration(vm_df_os)
+    if vm_df_os.empty:
+        st.warning(t["no_vm_data"])
+        st.stop()
+
+    # Filter by selected clusters (from Analysis page)
+    selected = st.session_state.get("selected_clusters")
+    if selected is not None and "cluster" in vm_df_os.columns:
+        vm_df_os["_cluster_norm"] = vm_df_os["cluster"].fillna("").astype(str).str.strip().replace("", "(unassigned)")
+        vm_df_os = vm_df_os[vm_df_os["_cluster_norm"].isin(selected)].drop(columns=["_cluster_norm"], errors="ignore")
+    if vm_df_os.empty:
+        st.warning(t["os_analysis_no_clusters_selected"])
+        st.stop()
+
+    os_df = compute_os_analysis(vm_df_os)
+    if os_df.empty:
+        st.warning(t["os_analysis_no_os_data"])
+        st.stop()
+
+    st.subheader(t["os_analysis_table_title"])
+    sel = st.session_state.get("selected_clusters")
+    if sel:
+        st.caption(t["os_analysis_table_caption"] + " " + t["os_analysis_selected_clusters"].format(clusters=", ".join(sorted(sel))))
+    else:
+        st.caption(t["os_analysis_table_caption"])
+    os_display = os_df.rename(columns={
+        "os": t["os_analysis_col_os"],
+        "vms": t["os_analysis_col_vms"],
+        "vcpus": t["os_analysis_col_vcpus"],
+        "ms_status": t["os_analysis_col_ms_status"],
+        "ms_date": t["os_analysis_col_ms_date"],
+        "ms_note": t["os_analysis_col_ms_note"],
+        "rh_status": t["os_analysis_col_rh_status"],
+        "rh_date": t["os_analysis_col_rh_date"],
+        "rh_note": t["os_analysis_col_rh_note"],
+    })
+    st.dataframe(os_display, width="stretch", hide_index=True)
+
+    st.subheader(t["os_analysis_legend_title"])
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**" + t["os_analysis_ms_legend"] + "**")
+        st.markdown(t["os_analysis_legend_supported"])
+        st.markdown(t["os_analysis_legend_maintenance"])
+        st.markdown(t["os_analysis_legend_eol"])
+        st.markdown(t["os_analysis_legend_other"])
+    with c2:
+        st.markdown("**" + t["os_analysis_rh_legend"] + "**")
+        st.markdown(t["os_analysis_legend_supported"])
+        st.markdown(t["os_analysis_legend_maintenance"])
+        st.markdown(t["os_analysis_legend_eol"])
+        st.markdown(t["os_analysis_legend_other"])
+
+    st.download_button(
+        label="📥 " + t["os_analysis_download"],
+        data=os_display.to_csv(index=False).encode("utf-8"),
+        file_name="os-analysis.csv",
+        mime="text/csv",
+        key="os_analysis_download_btn",
+    )
     st.stop()
 
 # ---- Cluster Design & Savings page ----
@@ -613,16 +901,17 @@ if st.session_state.page == "ha_diagram":
         ha_enabled=st.session_state.get("ha_enabled", True),
         ha_min_workers=st.session_state.get("ha_min_workers", 3),
         odf_enabled=st.session_state.get("odf_enabled", True),
+        t=t,
     )
     st.subheader(t["ha_recommendations"])
     for rec in ha_recs:
         st.markdown("- " + rec)
 
     st.subheader(t["network_settings_table"])
-    network_settings = get_network_settings()
+    network_settings = get_network_settings(t)
     st.dataframe(
-        pd.DataFrame(network_settings, columns=["Setting", "Recommended value"]),
-        use_container_width=True,
+        pd.DataFrame(network_settings, columns=[t["net_col_setting"], t["net_col_recommended"]]),
+        width="stretch",
         hide_index=True,
     )
 
@@ -631,6 +920,7 @@ if st.session_state.page == "ha_diagram":
         num_workers=workers_needed,
         worker_cores=st.session_state.worker_cores,
         worker_memory_gib=st.session_state.worker_memory_gib,
+        t=t,
     )
     try:
         st.graphviz_chart(dot)
@@ -661,12 +951,15 @@ if st.session_state.page == "migration_plan":
         st.stop()
 
     recommendations = analyze_all_vms(vm_df)
-    phases = build_migration_phases(recommendations)
-    global_risks, phase_risks, risk_summary = compute_risk_analysis(recommendations, phases, stats)
+    phases = build_migration_phases(recommendations, t)
+    global_risks, phase_risks, risk_summary = compute_risk_analysis(recommendations, phases, stats, t)
 
     st.subheader(t["migration_phases"])
-    for p in phases:
-        with st.expander(f"{p.name} — {len(p.vms)} " + t["vms"] + f" · {p.duration_estimate}", expanded=(p.name.startswith("Phase 1"))):
+    for i, p in enumerate(phases):
+        with st.expander(
+            f"{p.name} — {len(p.vms)} " + t["vms"] + f" · {p.duration_estimate}",
+            expanded=(i == 0),
+        ):
             st.write(p.description)
             st.markdown("**" + t["prerequisites"] + "**")
             for pre in p.prerequisites:
@@ -676,29 +969,36 @@ if st.session_state.page == "migration_plan":
                 st.markdown(f"- {r}")
             if p.vms:
                 st.markdown("**" + t["vms"] + ":**")
-                st.code("\n".join(f"- {v}" for v in p.vms[:25] + (["…"] if len(p.vms) > 25 else [])))
+                st.markdown("\n".join(f"- {v}" for v in p.vms[:25]) + ("\n- …" if len(p.vms) > 25 else ""))
 
     st.divider()
     st.subheader(t["risk_analysis_title"])
     overall = risk_summary.get("global_risk_level", "medium")
-    st.metric(t["risk_overall"], overall.upper())
+    overall_label = t.get(f"risk_level_{overall}", overall)
+    st.metric(t["risk_overall"], overall_label)
     st.caption(f"{t['risk_high']}: {risk_summary.get('high_risks', 0)} · {t['risk_medium']}: {risk_summary.get('medium_risks', 0)} · {t['risk_low']}: {risk_summary.get('low_risks', 0)}")
 
     st.markdown("**" + t["risk_global"] + "**")
     risk_df = pd.DataFrame([
-        {"Category": r.category, "Level": r.level, "Description": r.description, "Mitigation": r.mitigation}
+        {
+            t["risk_category"]: r.category,
+            t["risk_level"]: t.get(f"risk_level_{r.level}", r.level),
+            t["risk_description"]: r.description,
+            t["risk_mitigation"]: r.mitigation,
+        }
         for r in global_risks
     ])
-    st.dataframe(risk_df, use_container_width=True, hide_index=True)
+    st.dataframe(risk_df, width="stretch", hide_index=True)
 
     st.markdown("**" + t["risk_per_phase"] + "**")
     for pr in phase_risks:
-        st.markdown(f"- **{pr.phase_name}**: {pr.level} ({pr.vm_count} " + t["vms"] + ")")
+        lvl = t.get(f"risk_level_{pr.level}", pr.level)
+        st.markdown(f"- **{pr.phase_name}**: {lvl} ({pr.vm_count} " + t["vms"] + ")")
         for r in pr.risks:
-            st.caption(f"  {r.description} → {r.mitigation}")
+            st.caption(f"  {r.description} — {r.mitigation}")
 
     plan_with_risk_md = generate_plan_with_risk_markdown(
-        sheets, recommendations, stats, global_risks, phase_risks, risk_summary
+        sheets, recommendations, stats, global_risks, phase_risks, risk_summary, t
     )
     st.download_button(
         label="📥 " + t["download_plan_with_risk"],
@@ -1095,39 +1395,41 @@ if import_source == "file":
         st.stop()
 
 else:
-    # vCenter live import - dialog-style UI
+    # vCenter live import — centered card (form inside bordered container)
     col_left, col_center, col_right = st.columns([1, 2, 1])
     with col_center:
-        st.markdown(
-            """
-            <div class="vcenter-dialog-container">
-                <div class="vcenter-dialog-header">
-                    <h3><i class="fas fa-server"></i> """ + t["import_source_vcenter"] + """</h3>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        with st.form("vcenter_login_form", clear_on_submit=False):
-            vc_host = st.text_input(
-                t["vcenter_host"],
-                placeholder="vcenter.example.com",
-                help=t["vcenter_host_help"],
-                key="vcenter_host",
+        try:
+            _vc_box = st.container(border=True)
+        except TypeError:
+            _vc_box = st.container()
+        with _vc_box:
+            st.markdown(
+                "<div style='text-align:center;padding-bottom:0.75rem;border-bottom:1px solid #D1D1D6;margin-bottom:1rem;'>"
+                "<h3 style='margin:0;font-size:1.35rem;'><i class='fas fa-server' style='color:#007AFF;'></i> "
+                + t["import_source_vcenter"]
+                + "</h3></div>",
+                unsafe_allow_html=True,
             )
-            vc_user = st.text_input(t["vcenter_user"], key="vcenter_user", placeholder="administrator@vsphere.local")
-            vc_password = st.text_input(
-                t["vcenter_password"],
-                type="password",
-                key="vcenter_password",
-            )
-            vc_skip_ssl = st.checkbox(
-                t["vcenter_skip_ssl"],
-                value=False,
-                help=t["vcenter_skip_ssl_help"],
-                key="vcenter_skip_ssl",
-            )
-            submitted = st.form_submit_button(t["import_connect"])
+            with st.form("vcenter_login_form", clear_on_submit=False):
+                vc_host = st.text_input(
+                    t["vcenter_host"],
+                    placeholder="vcenter.example.com",
+                    help=t["vcenter_host_help"],
+                    key="vcenter_host",
+                )
+                vc_user = st.text_input(t["vcenter_user"], key="vcenter_user", placeholder="administrator@vsphere.local")
+                vc_password = st.text_input(
+                    t["vcenter_password"],
+                    type="password",
+                    key="vcenter_password",
+                )
+                vc_skip_ssl = st.checkbox(
+                    t["vcenter_skip_ssl"],
+                    value=False,
+                    help=t["vcenter_skip_ssl_help"],
+                    key="vcenter_skip_ssl",
+                )
+                submitted = st.form_submit_button(t["import_connect"])
 
         if not submitted:
             st.info(t["upload_info"])
@@ -1164,28 +1466,79 @@ if vm_df.empty:
     st.warning(t["no_vm_data"])
     st.stop()
 
+# Cluster selection: build table with checkboxes
+cluster_col = "cluster" if "cluster" in vm_df.columns else None
+if cluster_col:
+    vm_df["_cluster_norm"] = vm_df[cluster_col].fillna("").astype(str).str.strip()
+    vm_df["_cluster_norm"] = vm_df["_cluster_norm"].replace("", "(unassigned)")
+    cluster_counts = vm_df.groupby("_cluster_norm", dropna=False).agg(
+        vms=("vm", "count"),
+        vcpus=("cpus", "sum") if "cpus" in vm_df.columns else ("vm", "count"),
+    ).reset_index()
+    cluster_counts = cluster_counts.rename(columns={"_cluster_norm": "cluster"})
+    cluster_counts["include"] = False
+    cluster_df = cluster_counts[["cluster", "vms", "vcpus", "include"]].copy()
+    cluster_df = cluster_df.rename(columns={
+        "cluster": t["clusters_table_name"],
+        "vms": t["clusters_table_vms"],
+        "vcpus": t["clusters_table_vcpus"],
+        "include": t["clusters_table_include"],
+    })
+
+    st.subheader(t["clusters_table_title"])
+    st.caption(t["clusters_table_caption"])
+    edited_clusters = st.data_editor(
+        cluster_df,
+        column_config={
+            t["clusters_table_include"]: st.column_config.CheckboxColumn(
+                t["clusters_table_include"],
+                help=t["clusters_table_include_help"],
+                default=False,
+            ),
+            t["clusters_table_name"]: st.column_config.TextColumn(t["clusters_table_name"], disabled=True),
+            t["clusters_table_vms"]: st.column_config.NumberColumn(t["clusters_table_vms"], disabled=True),
+            t["clusters_table_vcpus"]: st.column_config.NumberColumn(t["clusters_table_vcpus"], disabled=True),
+        },
+        hide_index=True,
+        key="cluster_selector_editor",
+    )
+    selected_clusters = set(
+        edited_clusters[edited_clusters[t["clusters_table_include"]]][t["clusters_table_name"]].tolist()
+    )
+    st.session_state.selected_clusters = selected_clusters
+    vm_df = vm_df[vm_df["_cluster_norm"].isin(selected_clusters)].drop(columns=["_cluster_norm"], errors="ignore")
+else:
+    st.session_state.selected_clusters = None
+
+if vm_df.empty:
+    st.warning(t["clusters_none_selected"])
+    st.stop()
+
+progress_bar.progress(0.9, text=t["import_step_analyze"])
 recommendations = analyze_all_vms(vm_df)
 progress_bar.progress(1.0, text=t["import_step_done"])
 progress_bar.empty()
 stats = summary_stats(vm_df, recommendations)
-phases = build_migration_phases(recommendations)
-plan_md = generate_plan_markdown(sheets, recommendations, stats)
+stats["host_count"] = get_host_count(sheets) or get_host_count_from_vm_data(vm_df)
+phases = build_migration_phases(recommendations, t)
+plan_md = generate_plan_markdown(sheets, recommendations, stats, t)
 
 # Persist for Cluster Design page
 st.session_state.rvtools_stats = stats
 st.session_state.rvtools_sheets = sheets
+st.session_state.current_hosts = stats.get("host_count", st.session_state.current_hosts)
 
 rec_df = pd.DataFrame([
     {
-        "VM": r.vm_name,
-        "Status": r.status,
-        "Migrationstyp": r.migration_type,
-        "Aufwand": r.effort,
-        "vCPUs": r.cpus,
-        "RAM (MiB)": r.memory_mib,
-        "Disk (GB)": r.provisioned_gb,
-        "Hinweise": "; ".join(r.issues) if r.issues else "–",
-        "Empfehlungen": "; ".join(r.recommendations[:3]) if r.recommendations else "–",
+        t["rec_col_vm"]: r.vm_name,
+        t["rec_col_status"]: r.status,
+        t["rec_col_migration_type"]: r.migration_type,
+        t["rec_col_effort"]: r.effort,
+        t["rec_col_vcpus"]: r.cpus,
+        t["rec_col_ram_mib"]: r.memory_mib,
+        t["rec_col_disk_gb"]: r.provisioned_gb,
+        t["rec_col_notes"]: "; ".join(r.issues) if r.issues else "–",
+        t["rec_col_recommendations"]: "; ".join(r.recommendations[:3]) if r.recommendations else "–",
     }
     for r in recommendations
 ])
@@ -1214,16 +1567,19 @@ with tab_overview:
     if stats["clusters"]:
         st.write("**" + t["clusters_source"] + ":**", ", ".join(stats["clusters"]))
     st.subheader(t["raw_data"])
-    st.dataframe(vm_df.head(100), use_container_width=True)
+    st.dataframe(vm_df.head(100), width="stretch")
 
 with tab_recommendations:
     st.subheader(t["recommendations_per_vm"])
-    st.dataframe(rec_df, use_container_width=True)
+    st.dataframe(rec_df, width="stretch")
 
 with tab_plan:
     st.subheader(t["migration_plan_phases"])
-    for p in phases:
-        with st.expander(f"{p.name} – {len(p.vms)} " + t["vms"] + f" · {p.duration_estimate}", expanded=(p.name.startswith("Phase 1"))):
+    for i, p in enumerate(phases):
+        with st.expander(
+            f"{p.name} – {len(p.vms)} " + t["vms"] + f" · {p.duration_estimate}",
+            expanded=(i == 0),
+        ):
             st.write(p.description)
             st.write("**" + t["prerequisites"] + "**")
             for pre in p.prerequisites:
@@ -1233,7 +1589,7 @@ with tab_plan:
                 st.markdown(f"- {r}")
             if p.vms:
                 st.write("**" + t["vms"] + ":**")
-                st.code("\n".join(f"- {v}" for v in p.vms[:30] + (["…"] if len(p.vms) > 30 else [])))
+                st.markdown("\n".join(f"- {v}" for v in p.vms[:30]) + ("\n- …" if len(p.vms) > 30 else ""))
     st.subheader(t["full_plan_md"])
     st.markdown(plan_md)
 

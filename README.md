@@ -1,93 +1,121 @@
 # AlfsMigrationToolkit
 
-AlfsMigrationToolkit analyzes RVTools exports (XLSX/CSV) and creates migration recommendations as well as a migration plan for the transition from VMware vSphere to OpenShift Virtualization (including Migration Toolkit for Virtualization, MTV).
+AlfsMigrationToolkit analysiert RVTools-Exporte (XLSX/CSV) oder vCenter-Daten und erstellt Migrationsempfehlungen sowie einen Migrationsplan für den Übergang von VMware vSphere zu OpenShift Virtualization (inkl. Migration Toolkit for Virtualization, MTV).
 
-## Create and Push Repository on GitHub
+## Features
 
-The project is set up locally as a Git repo. Here is how to create a new repository on GitHub and push the code:
+- **Datenimport**: RVTools-Datei (XLSX/CSV) oder **vCenter Live-API** (pyvmomi)
+- **Mehrsprachigkeit**: Englisch, Deutsch, Französisch
+- **Analyse**: VM-Übersicht, Kompatibilitätsprüfung, Migrationsempfehlungen pro VM
+- **Migrationsplan**: Phasen, Reihenfolge, Risiken, Download als Markdown
+- **Risikoanalyse**: Globale und phasenbezogene Risiken mit Mitigation
+- **Cluster Design**: Berechnung benötigter Worker-Nodes, CPU/RAM-Auslastung, Dichte- und Stromersparnis
+- **ODF-Design**: OpenShift Data Foundation – Speicherkapazität und Replikationsfaktor
+- **HA & Netzwerk**: Topologie-Diagramm, HA-Empfehlungen, Netzwerk-Einstellungen
+- **Deploy-Prototyp**: Generierung von `install-config.yaml` und Run-Skripten für AWS, Azure, IBM Cloud, Bare Metal (inkl. Bare-Metal-Instanzen mit Kostenschätzung)
 
-1. Create a **new repository** on [GitHub](https://github.com/new) (e.g. `vmware-to-openshift-migration`), **without** initializing README, .gitignore, or License.
-2. Add the remote and push in the project folder (replace `YOUR-USERNAME` and the repo name if needed):
-
-   ```bash
-   cd vmware-to-openshift-migration
-   git remote add origin https://github.com/YOUR-USERNAME/vmware-to-openshift-migration.git
-   git branch -M main
-   git push -u origin main
-   ```
-
-   With SSH:
-
-   ```bash
-   git remote add origin git@github.com:YOUR-USERNAME/vmware-to-openshift-migration.git
-   git push -u origin main
-   ```
-
-## Prerequisites
+## Voraussetzungen
 
 - Python 3.9+
-- RVTools export: **File → Export all to Excel** (or CSV) in RVTools
+- RVTools-Export: **File → Export all to Excel** (oder CSV) in RVTools  
+  Oder: vCenter-Zugang für Live-Import (pyvmomi)
 
 ## Installation
 
 ```bash
-cd vmware-to-openshift-migration
+cd amt
 pip install -r requirements.txt
 ```
 
 ## Start
 
-**Important:** The command must be run from the `vmware-to-openshift-migration` project folder.
-
 ```bash
-cd vmware-to-openshift-migration
 streamlit run app.py
 ```
 
-Or from anywhere with the full path:
-
-```bash
-streamlit run /path/to/vmware-to-openshift-migration/app.py
-```
-
-Alternatively, use the start script:
+Oder mit dem Start-Skript:
 
 ```bash
 ./run.sh
-# or: bash run.sh
 ```
 
-### Docker
+Dann **http://localhost:8501** im Browser öffnen.
 
-Build and run with Docker:
+## Docker & Kubernetes
+
+### Container-Image bauen
 
 ```bash
-docker build -t vmware-to-openshift-migration .
-docker run -p 8501:8501 vmware-to-openshift-migration
+docker build -t alfs-migration-toolkit:latest .
 ```
 
-Or with Docker Compose:
+### Lokal mit Docker starten
 
 ```bash
-docker compose up --build
+docker run -p 8501:8501 alfs-migration-toolkit:latest
 ```
 
-Then open **http://localhost:8501** in your browser.
+### Auf Kubernetes deployen
 
-The interface opens in your browser. You can:
+```bash
+# Image in Registry pushen (optional)
+docker tag alfs-migration-toolkit:latest <registry>/alfs-migration-toolkit:latest
+docker push <registry>/alfs-migration-toolkit:latest
 
-1. **Upload RVTools file** (`.xlsx` or `.csv` from vInfo/vVM)
-2. **View overview** of VMs, clusters, and resources
-3. **Get recommendations** for OpenShift Virtualization compatibility
-4. **Download migration plan** (phases, order, risks)
+# Deployment, Service und Ingress anwenden
+kubectl apply -f k8s-deployment.yaml
+```
 
-## Supported RVTools Tabs
+Die Manifests enthalten:
+- **Deployment** mit Ressourcenlimits und Health-Probes
+- **Service** (ClusterIP)
+- **Ingress** (NGINX) mit WebSocket-Support für Streamlit
 
-- **vInfo** (primary): VM name, Powerstate, CPUs, Memory, Provisioned/In Use, Cluster, Host, OS, UUID
-- Optional: vDisk, vNic, vDatastore for more detailed recommendations
+Host im Ingress anpassen (`alfs-migration.example.com` → eigene Domain). Für HTTPS: TLS-Abschnitt in `k8s-deployment.yaml` auskommentieren und Secret anlegen.
 
-## Notes
+Lokaler Zugriff ohne Ingress-Controller:
+```bash
+kubectl port-forward svc/alfs-migration-toolkit 8501:80
+```
 
-- Storage values in RVTools are in **MiB** (not MB).
-- VMware Tools and optionally VDDK are prepared for warm migration.
-- The plan considers MTV (Migration Toolkit for Virtualization) and cold/warm migration.
+## Ablauf
+
+1. **Datenquelle wählen**: RVTools-Datei hochladen oder vCenter verbinden
+2. **Analyse**: Übersicht VMs, Cluster, Ressourcen
+3. **Empfehlungen**: OpenShift-Virtualization-Kompatibilität pro VM
+4. **Konfiguration** (Sidebar): Worker-Größe, Overcommit, ODF, HA
+5. **Cluster Design**: Benötigte Nodes, Einsparungen, ODF-Dimensionierung
+6. **HA-Diagramm**: Topologie und Netzwerk-Empfehlungen
+7. **Migrationsplan**: Phasen, Risiken, Download (.md)
+8. **Deploy**: `install-config.yaml` und Skripte für OpenShift-Installation herunterladen
+
+## Unterstützte RVTools-Tabs
+
+- **vInfo** (primär): VM-Name, Powerstate, CPUs, Memory, Provisioned/In Use, Cluster, Host, OS, UUID
+- Optional: vDisk, vNic, vDatastore für detailliertere Empfehlungen
+
+## Hinweise
+
+- Speicherwerte in RVTools sind in **MiB** (nicht MB).
+- VMware Tools und optional VDDK werden für Warm-Migration vorbereitet.
+- Der Plan berücksichtigt MTV (Migration Toolkit for Virtualization) sowie Cold- und Warm-Migration.
+
+## GitHub-Repository erstellen und pushen
+
+Das Projekt ist lokal als Git-Repo eingerichtet. So erstellst du ein neues Repository auf GitHub und pushst den Code:
+
+1. **Neues Repository** auf [GitHub](https://github.com/new) anlegen (z.B. `vmware-to-openshift-migration`), **ohne** README, .gitignore oder License.
+2. Remote hinzufügen und pushen (ersetze `YOUR-USERNAME` und den Repo-Namen bei Bedarf):
+
+   ```bash
+   git remote add origin https://github.com/YOUR-USERNAME/vmware-to-openshift-migration.git
+   git branch -M main
+   git push -u origin main
+   ```
+
+   Mit SSH:
+
+   ```bash
+   git remote add origin git@github.com:YOUR-USERNAME/vmware-to-openshift-migration.git
+   git push -u origin main
+   ```

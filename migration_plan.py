@@ -1,6 +1,6 @@
 """
 Migrationsplan von VMware zu OpenShift Virtualization.
-Phasen, Reihenfolge, Risiken, Zeitschätzung.
+Phasen, Reihenfolge, Risiken, Zeitschätzung — Texte über i18n-Dict (t).
 """
 
 from dataclasses import dataclass, field
@@ -23,8 +23,8 @@ class MigrationPhase:
     prerequisites: list = field(default_factory=list)
 
 
-def build_migration_phases(recommendations: list) -> list:
-    """Migrationsphasen aus VM-Empfehlungen ableiten."""
+def build_migration_phases(recommendations: list, t: dict) -> list:
+    """Migrationsphasen aus VM-Empfehlungen ableiten (lokalisiert)."""
     ready_low = [r.vm_name for r in recommendations if r.status == "ready" and r.effort == "low"]
     ready_medium = [r.vm_name for r in recommendations if r.status == "ready" and r.effort == "medium"]
     ready_high = [r.vm_name for r in recommendations if r.status == "ready" and r.effort == "high"]
@@ -33,149 +33,187 @@ def build_migration_phases(recommendations: list) -> list:
 
     phases = [
         MigrationPhase(
-            name="Phase 1 – Pilot",
-            description="VMs mit geringem Risiko und niedrigem Aufwand. Ideal zum Validieren von MTV und OpenShift Virt.",
+            name=t["mp_ph1_name"],
+            description=t["mp_ph1_desc"],
             vms=ready_low[:10],
-            duration_estimate="1–2 Wochen",
-            risks=["Minimal – Standard-Cold-Migration"],
+            duration_estimate=t["mp_ph1_duration"],
+            risks=[t["mp_ph1_risk1"]],
             prerequisites=[
-                "OpenShift Cluster mit OpenShift Virtualization installiert",
-                "Migration Toolkit for Virtualization (MTV) installiert",
-                "VMware Source Provider und OpenShift Destination Provider konfiguriert",
-                "Netz- und Speicher-Mapping definiert",
+                t["mp_ph1_pre1"],
+                t["mp_ph1_pre2"],
+                t["mp_ph1_pre3"],
+                t["mp_ph1_pre4"],
             ],
         ),
         MigrationPhase(
-            name="Phase 2 – Standard-Workloads",
-            description="Weitere VMs mit geringem/mittlerem Aufwand nach erfolgreichem Pilot.",
+            name=t["mp_ph2_name"],
+            description=t["mp_ph2_desc"],
             vms=ready_low[10:] + ready_medium,
-            duration_estimate="2–4 Wochen (abhängig von VM-Anzahl)",
-            risks=["Downtime je VM bei Cold-Migration planen"],
-            prerequisites=["Pilot-Phase abgeschlossen und validiert", "VDDK-Image für beschleunigte Migration (optional, für vSAN empfohlen)"],
+            duration_estimate=t["mp_ph2_duration"],
+            risks=[t["mp_ph2_risk1"]],
+            prerequisites=[t["mp_ph2_pre1"], t["mp_ph2_pre2"]],
         ),
         MigrationPhase(
-            name="Phase 3 – Review-Workloads",
-            description="VMs mit besonderen Anforderungen (z. B. viele vCPUs/Speicher). Manuelle Prüfung empfohlen.",
+            name=t["mp_ph3_name"],
+            description=t["mp_ph3_desc"],
             vms=ready_high + review,
-            duration_estimate="Individuell nach Prüfung",
-            risks=["Ressourcenlimits auf OpenShift prüfen", "Evtl. VM-Konfiguration anpassen (vCPU/RAM)"],
-            prerequisites=["Kapazitätsplanung für große VMs durchgeführt", "Abstimmung mit App-Ownern"],
+            duration_estimate=t["mp_ph3_duration"],
+            risks=[t["mp_ph3_risk1"], t["mp_ph3_risk2"]],
+            prerequisites=[t["mp_ph3_pre1"], t["mp_ph3_pre2"]],
         ),
         MigrationPhase(
-            name="Phase 4 – Manuelle Prüfung / Blocked",
-            description="VMs mit fehlenden Daten oder Kompatibilitätsproblemen. Einzelentscheidung nötig.",
+            name=t["mp_ph4_name"],
+            description=t["mp_ph4_desc"],
             vms=blocked,
-            duration_estimate="Nach Klärung",
-            risks=["Migration ohne Klärung nicht empfohlen"],
-            prerequisites=["RVTools-Daten ergänzen oder VM-Konfiguration in vSphere prüfen", "Entscheidung: Migration, Umbau oder Ausschluss"],
+            duration_estimate=t["mp_ph4_duration"],
+            risks=[t["mp_ph4_risk1"]],
+            prerequisites=[t["mp_ph4_pre1"], t["mp_ph4_pre2"]],
         ),
     ]
     return phases
 
 
-def generate_plan_markdown(sheets: dict, recommendations: list, stats: dict) -> str:
-    """Migrationsplan als Markdown-Report erzeugen."""
-    phases = build_migration_phases(recommendations)
+def _risk_level_tag(level: str, t: dict) -> str:
+    return {"high": t["risk_tag_high"], "medium": t["risk_tag_medium"], "low": t["risk_tag_low"]}.get(
+        level, level.upper()
+    )
+
+
+def generate_plan_markdown(sheets: dict, recommendations: list, stats: dict, t: dict) -> str:
+    """Migrationsplan als Markdown-Report erzeugen (lokalisiert)."""
+    phases = build_migration_phases(recommendations, t)
+    clusters = ", ".join(stats["clusters"]) or "–"
     lines = [
-        "# Migrationsplan: VMware vSphere → OpenShift Virtualization",
+        t["mp_doc_title"],
         "",
-        f"*Erstellt: {datetime.now().strftime('%Y-%m-%d %H:%M')}*",
+        t["mp_created"].format(date=datetime.now().strftime("%Y-%m-%d %H:%M")),
         "",
-        "## 1. Zusammenfassung",
+        t["mp_sec1_summary"],
         "",
-        f"- **VMs gesamt (für Migration):** {stats['total_vms']}",
-        f"- **Bereit (ready):** {stats['ready']}",
-        f"- **Prüfung empfohlen (review):** {stats['review']}",
-        f"- **Blockiert / Prüfung nötig:** {stats['blocked']}",
-        f"- **Empfohlene Cold-Migration:** {stats['cold_recommended']}",
-        f"- **Empfohlene Warm-Migration:** {stats['warm_recommended']}",
-        f"- **vCPUs gesamt:** {stats['total_vcpus']}",
-        f"- **Arbeitsspeicher gesamt:** {stats['total_memory_gib']} GiB",
-        f"- **Speicher (provisioned):** {stats['total_storage_gb']} GB",
-        f"- **Cluster (Quelle):** {', '.join(stats['clusters']) or '–'}",
+        t["mp_sum_vms"].format(n=stats["total_vms"]),
+        t["mp_sum_ready"].format(n=stats["ready"]),
+        t["mp_sum_review"].format(n=stats["review"]),
+        t["mp_sum_blocked"].format(n=stats["blocked"]),
+        t["mp_sum_cold"].format(n=stats["cold_recommended"]),
+        t["mp_sum_warm"].format(n=stats["warm_recommended"]),
+        t["mp_sum_vcpus"].format(n=stats["total_vcpus"]),
+        t["mp_sum_ram"].format(n=stats["total_memory_gib"]),
+        t["mp_sum_storage"].format(n=stats["total_storage_gb"]),
+        t["mp_sum_clusters"].format(clusters=clusters),
         "",
-        "## 2. Migrationsphasen",
+        t["mp_sec2_phases"],
         "",
     ]
     for p in phases:
         lines.append(f"### {p.name}\n")
         lines.append(p.description + "\n")
-        lines.append("**Geschätzte Dauer:** " + p.duration_estimate + "\n")
+        lines.append(t["mp_phase_duration"].format(d=p.duration_estimate) + "\n")
         if p.vms:
-            lines.append("**VMs:**")
+            lines.append(t["mp_phase_vms_header"])
             for vm in p.vms[:50]:
                 lines.append(f"- {vm}")
             if len(p.vms) > 50:
-                lines.append(f"- … und {len(p.vms) - 50} weitere")
+                lines.append(t["mp_more_vms"].format(n=len(p.vms) - 50))
         else:
-            lines.append("*(Keine VMs in dieser Phase)*")
+            lines.append(t["mp_phase_no_vms"])
         lines.append("")
-        lines.append("**Voraussetzungen:**")
+        lines.append(t["mp_prereq_header"])
         for pre in p.prerequisites:
             lines.append(f"- {pre}")
         lines.append("")
-        lines.append("**Risiken / Hinweise:**")
+        lines.append(t["mp_risks_header"])
         for r in p.risks:
             lines.append(f"- {r}")
         lines.append("")
 
-    lines.extend([
-        "## 3. Empfohlene Schritte (MTV)",
-        "",
-        "1. **OpenShift Virtualization** und **Migration Toolkit for Virtualization (MTV)** installieren.",
-        "2. **VMware Source Provider** in MTV konfigurieren (vCenter, Anmeldedaten, ggf. VDDK).",
-        "3. **OpenShift Destination Provider** konfigurieren.",
-        "4. **Netz-Mapping** und **Speicher-Mapping** anlegen.",
-        "5. **Plan** in MTV anlegen und VMs in der empfohlenen Phasenreihenfolge migrieren.",
-        "6. Cold-Migration: VM ausschalten → Plan starten → nach Migration auf OpenShift starten.",
-        "7. Warm-Migration (wo empfohlen): VM eingeschaltet lassen, MTV führt Warm-Migration durch.",
-        "",
-        "## 4. Hinweise",
-        "",
-        "- Speicherangaben aus RVTools sind in **MiB**; MTV nutzt entsprechende Konvertierung.",
-        "- **VDDK** ist für vSAN-Quellen erforderlich und beschleunigt Migration generell.",
-        "- **NVMe-Disks** (VMware) werden von MTV nicht unterstützt – vor Migration prüfen.",
-        "- Dokumentation: [Planning your migration to OpenShift Virtualization (Red Hat)](https://docs.redhat.com/en/documentation/migration_toolkit_for_virtualization/).",
-        "",
-    ])
+    lines.extend(
+        [
+            t["mp_sec3_mtv"],
+            "",
+            t["mp_mtv_steps"],
+            "",
+            t["mp_sec4_notes"],
+            "",
+            t["mp_notes_body"],
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 
-def generate_plan_with_risk_markdown(sheets: dict, recommendations: list, stats: dict, global_risks: list, phase_risks: list, risk_summary: dict) -> str:
-    """Migration plan markdown including risk analysis section."""
-    plan_md = generate_plan_markdown(sheets, recommendations, stats)
+def generate_plan_with_risk_markdown(
+    sheets: dict,
+    recommendations: list,
+    stats: dict,
+    global_risks: list,
+    phase_risks: list,
+    risk_summary: dict,
+    t: dict,
+) -> str:
+    """Migration plan markdown including risk analysis section (lokalisiert)."""
+    plan_md = generate_plan_markdown(sheets, recommendations, stats, t)
+    level = risk_summary.get("global_risk_level", "medium")
+    level_disp = t.get(f"risk_level_{level}", level)
     lines = [
         plan_md,
         "",
         "---",
         "",
-        "## 5. Risk analysis",
+        t["mp_sec5_risk"],
         "",
-        f"**Overall risk level:** {risk_summary.get('global_risk_level', 'medium')}",
-        f"- High: {risk_summary.get('high_risks', 0)} | Medium: {risk_summary.get('medium_risks', 0)} | Low: {risk_summary.get('low_risks', 0)}",
+        t["mp_risk_overall_line"].format(level=level_disp),
+        t["mp_risk_counts_line"].format(
+            h=risk_summary.get("high_risks", 0),
+            m=risk_summary.get("medium_risks", 0),
+            l=risk_summary.get("low_risks", 0),
+        ),
         "",
-        "### Global risks and mitigations",
+        t["mp_risk_global_header"],
         "",
     ]
     for r in global_risks:
-        lines.append(f"- **[{r.level.upper()}] {r.category}:** {r.description}")
-        lines.append(f"  - *Mitigation:* {r.mitigation}")
+        tag = _risk_level_tag(r.level, t)
+        lines.append(
+            t["mp_risk_global_item"].format(
+                level=tag,
+                category=r.category,
+                description=r.description,
+                mitigation=r.mitigation,
+                mit_label=t["mp_mitigation_label"],
+            )
+        )
         lines.append("")
-    lines.append("### Per-phase risk")
+    lines.append(t["mp_risk_per_phase_header"])
     for pr in phase_risks:
-        lines.append(f"- **{pr.phase_name}**: {pr.level} ({pr.vm_count} VMs)")
+        lvl = t.get(f"risk_level_{pr.level}", pr.level)
+        lines.append(
+            t["mp_risk_phase_line"].format(
+                phase=pr.phase_name,
+                level=lvl,
+                vm_count=pr.vm_count,
+                vms_label=t["vms"],
+            )
+        )
         for r in pr.risks:
-            lines.append(f"  - {r.description} → {r.mitigation}")
+            lines.append(
+                t["mp_risk_phase_subitem"].format(
+                    description=r.description,
+                    mitigation=r.mitigation,
+                )
+            )
     lines.append("")
     return "\n".join(lines)
 
 
 def generate_plan_from_file(path: str) -> tuple:
     """RVTools-Datei laden, analysieren und Migrationsplan als Markdown erzeugen."""
+    from i18n import get_translations
+
     sheets = load_rvtools(path)
     vm_df = get_vm_data(sheets)
     vm_df = filter_vms_for_migration(vm_df)
     recommendations = analyze_all_vms(vm_df)
     stats = summary_stats(vm_df, recommendations)
-    plan_md = generate_plan_markdown(sheets, recommendations, stats)
+    t = get_translations("en")
+    plan_md = generate_plan_markdown(sheets, recommendations, stats, t)
     return sheets, recommendations, stats, plan_md
