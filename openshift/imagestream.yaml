@@ -1,0 +1,10 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: alfs-migration-toolkit
+  namespace: vma
+  labels:
+    app: alfs-migration-toolkit
+spec:
+  lookupPolicy:
+    local: true

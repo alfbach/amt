@@ -1,0 +1,14 @@
+[server]
+headless = true
+# Required for st.file_uploader in Docker/Podman/OpenShift (XSRF cookies break uploads)
+enableCORS = false
+enableXsrfProtection = false
+maxUploadSize = 200
+address = "0.0.0.0"
+port = 8501
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"

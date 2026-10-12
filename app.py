@@ -10,7 +10,6 @@ import warnings
 warnings.filterwarnings("ignore", message=r".*urllib3 v2 only supports OpenSSL.*")
 warnings.filterwarnings("ignore", message=r".*urllib3.*OpenSSL.*", category=UserWarning)
 
-import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -29,7 +28,13 @@ from ha_network_diagram import build_topology_dot, get_ha_recommendations, get_n
 from i18n import get_translations
 from migration_plan import build_migration_phases, generate_plan_markdown, generate_plan_with_risk_markdown
 from risk_analysis import compute_risk_analysis
-from rvtools_parser import filter_vms_for_migration, get_vm_data, get_host_count, get_host_count_from_vm_data, load_rvtools
+from rvtools_parser import (
+    filter_vms_for_migration,
+    get_vm_data,
+    get_host_count,
+    get_host_count_from_vm_data,
+    load_rvtools_bytes,
+)
 try:
     from vcenter_client import fetch_vms_from_vcenter
     VCENTER_AVAILABLE = True
@@ -1381,13 +1386,7 @@ if import_source == "file":
     progress_bar = st.progress(0, text=t["import_progress"])
     try:
         progress_bar.progress(0.15, text=t["import_step_load"])
-        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded.name).suffix) as tmp:
-            tmp.write(uploaded.getvalue())
-            tmp_path = tmp.name
-        try:
-            sheets = load_rvtools(tmp_path)
-        finally:
-            Path(tmp_path).unlink(missing_ok=True)
+        sheets = load_rvtools_bytes(uploaded.getvalue(), uploaded.name or "export.csv")
         progress_bar.progress(0.5, text=t["import_step_analyze"])
     except Exception as e:
         progress_bar.empty()

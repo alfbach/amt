@@ -5,7 +5,7 @@ Unterstützt vInfo, vVM und optionale Tabs (vDisk, vNic, vDatastore).
 
 import io
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 import pandas as pd
 
@@ -56,20 +56,71 @@ def _normalize_columns(df: pd.DataFrame, column_map: dict[str, list[str]]) -> pd
     return df.rename(columns=rename)
 
 
-def _read_excel_sheets(path: Path) -> dict[str, pd.DataFrame]:
-    """Alle Sheets einer Excel-Datei einlesen."""
-    return pd.read_excel(path, sheet_name=None, engine="openpyxl")
+def _excel_engine(suffix: str) -> str:
+    """openpyxl für .xlsx, xlrd für altes .xls."""
+    if suffix == ".xls":
+        return "xlrd"
+    return "openpyxl"
 
 
-def _read_first_csv(path: Path) -> pd.DataFrame:
-    """Erste CSV-Datei einlesen (für einzelne CSV oder vInfo-Export)."""
-    return pd.read_csv(path, encoding="utf-8", on_bad_lines="skip")
+def _read_excel_sheets(source: Any, filename: str = "") -> dict[str, pd.DataFrame]:
+    """Alle Sheets einer Excel-Datei einlesen (Pfad oder file-like)."""
+    suffix = Path(filename).suffix.lower() if filename else ""
+    if not suffix and isinstance(source, (str, Path)):
+        suffix = Path(source).suffix.lower()
+    if hasattr(source, "seek"):
+        source.seek(0)
+    return pd.read_excel(source, sheet_name=None, engine=_excel_engine(suffix))
+
+
+def _read_csv(source: Any) -> pd.DataFrame:
+    """CSV einlesen; UTF-8 mit Fallback auf Latin-1 (häufig bei RVTools)."""
+    encodings = ("utf-8", "utf-8-sig", "cp1252", "latin-1")
+    last_err: Optional[Exception] = None
+    for enc in encodings:
+        try:
+            if hasattr(source, "seek"):
+                source.seek(0)
+            return pd.read_csv(source, encoding=enc, on_bad_lines="skip")
+        except UnicodeDecodeError as e:
+            last_err = e
+            continue
+    if last_err:
+        raise last_err
+    raise ValueError("CSV konnte nicht gelesen werden.")
+
+
+def _sheets_from_excel(source: Any, filename: str = "") -> dict[str, pd.DataFrame]:
+    sheets = _read_excel_sheets(source, filename=filename)
+    result = {}
+    for name, df in sheets.items():
+        name_clean = str(name).strip()
+        if name_clean and not df.empty:
+            result[name_clean] = df
+    return result
+
+
+def load_rvtools_bytes(data: bytes, filename: str) -> dict:
+    """
+    RVTools-Export aus Bytes laden (z. B. Streamlit UploadedFile).
+    Vermeidet temporäre Dateien – wichtig in OpenShift-Containern.
+    """
+    if not data:
+        raise ValueError("Leere Datei.")
+    name = filename or "export.csv"
+    suffix = Path(name).suffix.lower()
+    if suffix in (".xlsx", ".xls"):
+        return _sheets_from_excel(io.BytesIO(data), filename=name)
+    if suffix == ".csv":
+        df = _read_csv(io.BytesIO(data))
+        return {"vInfo": df} if not df.empty else {}
+    raise ValueError("Nur .xlsx, .xls oder .csv werden unterstützt.")
 
 
 def load_rvtools(path: Union[str, Path]) -> dict:
     """
     RVTools-Export laden. Akzeptiert:
-    - .xlsx: alle Sheets (vInfo, vVM, vDisk, ...)
+    - .xlsx / .xls: alle Sheets (vInfo, vVM, vDisk, ...)
     - .csv: wird als vInfo-ähnliche Tabelle interpretiert
     """
     path = Path(path)
@@ -77,20 +128,14 @@ def load_rvtools(path: Union[str, Path]) -> dict:
         raise FileNotFoundError(f"Datei nicht gefunden: {path}")
 
     if path.suffix.lower() in (".xlsx", ".xls"):
-        sheets = _read_excel_sheets(path)
-        result = {}
-        for name, df in sheets.items():
-            name_clean = str(name).strip()
-            if name_clean and not df.empty:
-                result[name_clean] = df
-        return result
+        return _sheets_from_excel(path)
 
     if path.suffix.lower() == ".csv":
-        df = _read_first_csv(path)
+        with path.open("rb") as f:
+            df = _read_csv(f)
         return {"vInfo": df} if not df.empty else {}
 
     raise ValueError("Nur .xlsx, .xls oder .csv werden unterstützt.")
-
 
 def get_vm_data(sheets: dict[str, pd.DataFrame]) -> pd.DataFrame:
     """

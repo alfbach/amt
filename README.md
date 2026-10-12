@@ -41,41 +41,39 @@ Oder mit dem Start-Skript:
 
 Dann **http://localhost:8501** im Browser öffnen.
 
-## Docker & Kubernetes
+## Podman & OpenShift
 
-### Container-Image bauen
+### Container-Image bauen (Podman)
 
 ```bash
-docker build -t alfs-migration-toolkit:latest .
+podman build --format docker -t alfs-migration-toolkit:latest .
 ```
 
-### Lokal mit Docker starten
+### Lokal starten
 
 ```bash
-docker run -p 8501:8501 alfs-migration-toolkit:latest
+podman run --rm -p 8501:8501 alfs-migration-toolkit:latest
 ```
 
-### Auf Kubernetes deployen
+Dann **http://localhost:8501** öffnen und eine RVTools-Datei (XLSX/CSV) hochladen.
+
+> **Hinweis:** Im Container sind `enableXsrfProtection=false` und `enableCORS=false` gesetzt.
+> Ohne das schlägt der RVTools-Upload in Docker/Podman/OpenShift typischerweise mit 403/400 fehl.
+
+### OpenShift (Projekt `vma`)
+
+Vollständige Anleitung: **[docs/OPENSHIFT-DEPLOY.md](docs/OPENSHIFT-DEPLOY.md)**
 
 ```bash
-# Image in Registry pushen (optional)
-docker tag alfs-migration-toolkit:latest <registry>/alfs-migration-toolkit:latest
-docker push <registry>/alfs-migration-toolkit:latest
+oc new-project vma   # falls nötig
+oc apply -k openshift/
+# Image vorher pushen bzw.: oc start-build alfs-migration-toolkit --from-dir=. --follow
+```
 
-# Deployment, Service und Ingress anwenden
+### Kubernetes (generisch)
+
+```bash
 kubectl apply -f k8s-deployment.yaml
-```
-
-Die Manifests enthalten:
-- **Deployment** mit Ressourcenlimits und Health-Probes
-- **Service** (ClusterIP)
-- **Ingress** (NGINX) mit WebSocket-Support für Streamlit
-
-Host im Ingress anpassen (`alfs-migration.example.com` → eigene Domain). Für HTTPS: TLS-Abschnitt in `k8s-deployment.yaml` auskommentieren und Secret anlegen.
-
-Lokaler Zugriff ohne Ingress-Controller:
-```bash
-kubectl port-forward svc/alfs-migration-toolkit 8501:80
 ```
 
 ## Ablauf
